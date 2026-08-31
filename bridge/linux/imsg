@@ -5,7 +5,7 @@
 # the Mac holds Full Disk Access, so we proxy every query over the multiplexed
 # ssh ControlMaster socket (~47ms warm). Backend: <mac>:~/bin/imsg
 #
-# Usage is identical to the fnix tool: recent|from|search|thread|contacts|chats
+# Usage is identical to the Mac-side tool: recent|from|search|thread|contacts|chats
 set -euo pipefail
 
 # The Mac that holds chat.db — an ssh Host alias from ~/.ssh/config.
@@ -16,7 +16,7 @@ if ! ssh -o ConnectTimeout=5 "$MAC" true 2>/dev/null; then
   exit 69   # EX_UNAVAILABLE
 fi
 
-# `imsg groups` is vic-local: the fnix tool has no group lookup, and Law 7 says
+# `imsg groups` is Linux-side: the Mac tool has no group lookup, so we
 # extend the shim rather than fork the Mac-side Python. Emits JSON
 # [{chat, name, participants:[handle,...]}] for every group chat (style=43).
 if [[ "${1:-}" == "groups" ]]; then

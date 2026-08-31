@@ -182,7 +182,7 @@ def render(rows, as_json: bool, with_names: bool = True) -> None:
 # Recently Deleted (the 30-day bin, synced from iPhone via Messages in iCloud)
 # keeps its rows in chat.db. Hide them, or a conversation deleted on the phone
 # lingers in every client for a month. IMSG_INCLUDE_DELETED=1 shows them.
-# (Larry, 2026-08-30 - for Blip on vic)
+# (added for Blip, 2026-08-30)
 MESSAGE_SRC = (
     "message"
     if os.environ.get("IMSG_INCLUDE_DELETED") == "1"
