@@ -177,20 +177,34 @@ BarWidget {
   // else; if it dies (sleep, network), a timer restarts it and the 6 s poll
   // resumes in the meantime.
   property bool watchAlive: false
+  property int watchFails: 0
   Process {
     id: watchProc
     command: [root.home + "/bin/imsg", "watch"]
     running: true
     stdout: SplitParser {
       onRead: function(line) {
-        if (String(line).trim() === "ready") { root.watchAlive = true; return }
+        var l = String(line).trim()
+        watchLiveness.restart()          // any line proves the channel is real
+        if (l === "ready") { root.watchAlive = true; root.watchFails = 0; return }
+        if (l === "hb") return           // heartbeat only — no refresh
         pingDebounce.restart()
       }
     }
     onExited: {
       root.watchAlive = false
+      watchLiveness.stop()
+      root.watchFails = Math.min(root.watchFails + 1, 5)
       watchRestart.restart()
     }
+  }
+  // The server heartbeats every ~30 s; 90 s of total silence means a
+  // half-open ssh channel — kill it so the restart path (and the fast poll)
+  // takes over instead of trusting a dead pipe forever.
+  Timer {
+    id: watchLiveness
+    interval: 90000
+    onTriggered: { watchProc.running = false }
   }
   Timer {
     id: pingDebounce
@@ -206,7 +220,10 @@ BarWidget {
   }
   Timer {
     id: watchRestart
-    interval: 8000
+    // Exponential backoff on consecutive failures (8s → 128s cap): a Mac
+    // that is off for the night must not eat an ssh probe every 8 seconds.
+    // Any successful "ready" resets the ladder.
+    interval: 8000 * Math.pow(2, root.watchFails)
     onTriggered: watchProc.running = true
   }
 

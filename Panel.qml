@@ -107,15 +107,24 @@ Panel {
   // reload themselves. The guard makes unchanged refreshes free.
   property string activeLastTs: ""
   onThreadsChanged: {
-    if (!inThread) return
+    // `opened` too, not just inThread: a CLOSED panel still holds `active`,
+    // and reloading a hidden thread marks it read without it ever being
+    // seen (Codex HIGH, 1.1.0 review).
+    if (!inThread || !opened) return
     for (var i = 0; i < threads.length; i++) {
       var t = threads[i]
       if (String(t.chat) !== String(active.chat)) continue
       if (String(t.last_ts) !== activeLastTs) {
         activeLastTs = String(t.last_ts)
         active = t              // fresher name/guid too (a group can BECOME sendable)
-        pinToBottom = true
-        requestThreadLoad(String(t.chat))
+        // The push ping usually started this exact load already — don't
+        // stack a second one behind it.
+        var busyHere = (threadProc.running && threadRunningChat === String(t.chat))
+                       || pendingThreadChat === String(t.chat)
+        if (!busyHere) {
+          pinToBottom = true
+          requestThreadLoad(String(t.chat))
+        }
       }
       return
     }
@@ -347,7 +356,8 @@ Panel {
    *  without waiting for the collector round-trip. Cheap when nothing
    *  changed; the thread loader already serializes concurrent requests. */
   function pushReload() {
-    if (!inThread || threadProc.running && pendingThreadChat !== "") return
+    if (!inThread || !opened) return
+    if (threadProc.running && pendingThreadChat !== "") return
     pinToBottom = true
     requestThreadLoad(String(active.chat))
   }
@@ -460,7 +470,9 @@ Panel {
     id: threadProc
     stdout: StdioCollector {
       onStreamFinished: {
-        var belongsHere = root.inThread && String(root.active.chat) === root.threadRunningChat
+        // `opened` matters: a load finishing after the panel closed must not
+        // render into a hidden view or mark the thread read unseen.
+        var belongsHere = root.opened && root.inThread && String(root.active.chat) === root.threadRunningChat
         if (!belongsHere) return
         root.loading = false
         try {
