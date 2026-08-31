@@ -100,39 +100,37 @@ enough to poll, fast enough that the panel feels local.
 
 ## Install
 
+Blip's entire Mac side is **[claude-on-mac](https://github.com/nixfred/claude-on-mac)** —
+a small toolkit that teaches an AI agent (or a shell) to read `chat.db` and drive
+Messages.app with per-message consent. Blip doesn't fork it or vendor it; it
+calls `imsg` and `imsg-send` and nothing else. Install that first.
+
 **Requirements**
 
 - A Mac signed into Messages with your Apple ID (a Mac mini in a closet is
-  perfect), reachable from the Linux box over SSH — LAN or Tailscale.
+  perfect), reachable from the Linux box over SSH — Tailscale recommended.
 - *Messages in iCloud* on, so the Mac's `chat.db` mirrors your phone.
+- claude-on-mac **≥ 1.4.0** (`imsg groups` and the Recently-Deleted filter).
 - Linux: [Omarchy](https://omarchy.org), `bun`, `notify-send`, `wl-copy`.
 
-**On the Mac**
+**1. On the Mac** — follow claude-on-mac's README (it's one paste into Claude
+Code), then its [`docs/remote-ssh.md`](https://github.com/nixfred/claude-on-mac/blob/main/docs/remote-ssh.md):
+enable Remote Login, grant Full Disk Access to `/usr/libexec/sshd-keygen-wrapper`,
+and warm the Messages Automation grant once from an SSH session.
 
-1. Copy `bridge/mac/imsg` and `bridge/mac/imsg-send` to `~/bin/`, `chmod +x`.
-2. Grant your SSH login Full Disk Access once: *System Settings → Privacy &
-   Security → Full Disk Access → sshd* (or the terminal you run `sshd` from).
-3. `export IMSG_SELF_HANDLES="+15551234567,you@icloud.com"` in your shell rc
-   (used by `imsg-send --self`).
-4. Send yourself one message from an SSH session to trigger the Automation
-   prompt on the Mac: `imsg-send --self --yes "hello from linux"`. Click OK.
-
-**On Linux**
+**2. On Linux** — claude-on-mac's remote shims, per the same doc:
 
 ```sh
-# ~/.ssh/config — the shims look for a Host named `mac`
-# (override with BLIP_MAC_HOST=<alias> in your environment)
-Host mac
-  HostName <mac-ip-or-tailscale-name>
-  User <your-mac-user>
-  ControlMaster auto
-  ControlPath ~/.ssh/cm/%r@%h:%p
-  ControlPersist 10m
-mkdir -p ~/.ssh/cm
+export CLAUDE_ON_MAC_TARGET=you@your-mac.tail1234.ts.net   # in your shell rc
+ln -s ~/claude-on-mac/bin/remote/imsg      ~/bin/imsg
+ln -s ~/claude-on-mac/bin/remote/imsg-send ~/bin/imsg-send
+imsg recent 5                                   # if this prints messages, the bridge is up
+imsg --json groups 3                            # needs ≥ 1.4.0
+```
 
-cp bridge/linux/imsg bridge/linux/imsg-send ~/bin/ && chmod +x ~/bin/imsg*
-imsg recent 5                                  # if this prints messages, the bridge is up
+**3. Blip**
 
+```sh
 git clone https://github.com/nixfred/blip ~/.config/omarchy/plugins/nixfred.blip
 omarchy-restart-shell
 ```
@@ -175,12 +173,12 @@ it has *seen* — drives toasts) separate from `readMark` and per-thread
 dots). Fold them together and the badge flashes to 1 and resets on the next
 poll. Yes, that shipped once.
 
-**Groups send by GUID.** `imsg` reports a group as a bare 32-hex
-`chat_identifier`; AppleScript's `chat id` wants the full `any;+;<id>`. A
-group's `handle` field is whichever member spoke last — send to *that* and you
-DM one person while the panel shows the group. `bridge/linux/imsg groups`
-supplies the real GUID; a group whose GUID isn't cached yet is read-only rather
-than guessed.
+**Groups send by GUID.** Message rows carry a group as a bare
+`chat_identifier` (32 hex, or `chat<digits>`); AppleScript's `chat id` wants
+the full `any;+;<id>`. A group's `handle` field is whichever member spoke last
+— send to *that* and you DM one person while the panel shows the group.
+`imsg groups` supplies the real GUID; a group whose GUID isn't cached yet is
+read-only rather than guessed.
 
 **The self-thread lies.** A message you send yourself lands twice: once
 `from_me=true`, once `from_me=false`, same timestamp and text. Every counter and
@@ -188,7 +186,7 @@ every bubble runs through `dedupeSelfEcho()` first or your own notes light the
 badge forever.
 
 **Deleted means deleted.** macOS keeps deleted messages in a 30-day "Recently
-Deleted" bin that is still in `chat.db`. `bridge/mac/imsg` hides those rows, so
+Deleted" bin that is still in `chat.db`. claude-on-mac's `imsg` hides those rows, so
 a conversation you delete on the phone disappears from Blip within one poll of
 the iCloud sync. `IMSG_INCLUDE_DELETED=1` shows them again.
 
@@ -221,7 +219,8 @@ screenshot your changes. See [CLAUDE.md](CLAUDE.md) for the invariants.
 ## Credits
 
 Built by Fred Nix and Larry (his Claude Code collaborator) in one evening on
-[Omarchy](https://omarchy.org). The Mac-side `imsg` tools predate Blip and are
-the reason it took an evening, not a week.
+[Omarchy](https://omarchy.org). The Mac side is entirely
+[claude-on-mac](https://github.com/nixfred/claude-on-mac) — it predates Blip,
+and it's the reason this took an evening, not a week.
 
 MIT.

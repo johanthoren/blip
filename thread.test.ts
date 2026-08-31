@@ -279,7 +279,7 @@ describe("loadThread", () => {
     const r = loadThread("+1", 10, "2026-08-30", fake({ status: 69 }));
     expect(r.ok).toBe(false);
     expect(r.online).toBe(false);
-    expect(r.error).toBe("fnix unreachable");
+    expect(r.error).toBe("Mac unreachable");
   });
 
   test("malformed stdout is reported, not thrown", () => {

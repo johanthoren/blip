@@ -18,7 +18,8 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 const HOME = process.env.HOME ?? "/home/pi";
@@ -29,17 +30,23 @@ export const STATE_PATH = `${HOME}/.local/state/blip/state.json`;
 export const ALLOWLIST_PATH = `${HOME}/.config/blip/allowlist.json`;
 
 /**
- * Shallow poll window. Unread is counted inside this window, so it must be
- * wide enough that a burst of bank alerts cannot push a real unread out of it
- * and silently drop the badge. 150 msgs ≈ 40KB per tick.
+ * Shallow poll window for previews and toasts. Badge counts come from a
+ * separate pending-message query, so unread messages cannot fall out of this
+ * window and disappear merely because newer traffic arrived.
  */
 export const POLL_WINDOW = 150;
 /** Deep window, fetched when the panel opens and needs a real thread list. */
 export const DEEP_WINDOW = 500;
 
 export interface ImsgMessage {
+  /** Stable chat.db message ROWID, supplied by the bundled Mac bridge. */
+  id?: number | string;
+  /** Stable Messages GUID when available. */
+  guid?: string;
   ts: string;          // "YYYY-MM-DD HH:MM:SS" — lexically sortable, which we rely on
   from_me: boolean;
+  /** True only when the Mac bridge knows this is the configured self chat. */
+  self_chat?: boolean;
   handle: string;
   name: string | null;
   service: string;
@@ -67,6 +74,8 @@ export interface Toast {
   name: string;
   text: string;
   ts: string;
+  /** Opaque digest persisted for dedupe; never contains message text. */
+  key: string;
 }
 
 /**
@@ -90,7 +99,7 @@ export interface BlipState {
   /** Per-thread read marks — iMessage semantics: the blue dot stays on a
    *  thread until THAT conversation is opened, not until the list is viewed. */
   readMarks: Record<string, string>;
-  toasted: string[];   // recent "ts|chat|text" keys, for self-thread echo dedupe
+  toasted: string[];   // recent opaque sha256 keys; never message content
 }
 
 export interface BlipOutput {
@@ -101,6 +110,8 @@ export interface BlipOutput {
   unread: number;
   threads: Thread[];
   toast: Toast[];
+  /** False means models are fresh but state could not be committed. */
+  persisted: boolean;
 }
 
 // ---------------------------------------------------------------- state I/O
@@ -116,20 +127,32 @@ export function loadState(path = STATE_PATH): BlipState {
       readMark: typeof s.readMark === "string" ? s.readMark : watermark,
       readMarks: s.readMarks && typeof s.readMarks === "object" ? { ...s.readMarks } : {},
       groups: s.groups && typeof s.groups === "object" ? { ...s.groups } : {},
-      toasted: Array.isArray(s.toasted) ? s.toasted.slice(-200) : [],
+      // Older releases stored ts|chat|text verbatim. Hash legacy entries while
+      // loading so the next successful save scrubs message bodies from disk.
+      toasted: Array.isArray(s.toasted)
+        ? s.toasted.filter((k): k is string => typeof k === "string").slice(-200).map(normalizeToastKey)
+        : [],
     };
   } catch {
     return { watermark: "", readMark: "", readMarks: {}, groups: {}, toasted: [] };
   }
 }
 
-export function saveState(state: BlipState, path = STATE_PATH): void {
+export function saveState(state: BlipState, path = STATE_PATH): boolean {
+  const dir = dirname(path);
+  const temp = `${path}.${process.pid}.tmp`;
   try {
-    mkdirSync(dirname(path), { recursive: true });
-    // Cap the dedupe ring so the file cannot grow without bound.
-    writeFileSync(path, JSON.stringify({ ...state, toasted: state.toasted.slice(-200) }));
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    chmodSync(dir, 0o700);
+    // Temp + rename prevents a killed collector from leaving truncated JSON.
+    // 0600 is defense in depth even when the home directory is already 0700.
+    writeFileSync(temp, JSON.stringify({ ...state, toasted: state.toasted.slice(-200) }), { mode: 0o600 });
+    renameSync(temp, path);
+    chmodSync(path, 0o600);
+    return true;
   } catch {
-    /* a read-only state dir must not take the bar down */
+    try { unlinkSync(temp); } catch { /* temp may not exist */ }
+    return false;
   }
 }
 
@@ -151,9 +174,14 @@ export function displayName(msgs: ImsgMessage[]): string {
   return chatKey(msgs[0]);
 }
 
-/** Group chat ids are 32 hex chars (chat.style=43); DMs are a phone or email. */
+/**
+ * Group chat ids (chat.style=43) are either 32 hex chars or "chat<digits>";
+ * DMs are a phone or email. Anything that is not a phone/email is treated as
+ * a group so an unknown id shape can never be mistaken for a DM target.
+ */
 export function isGroupChat(chat: string): boolean {
-  return /^[0-9a-f]{32}$/i.test(chat);
+  if (/^\+?[0-9]{5,}$/.test(chat) || chat.indexOf("@") > 0) return false;
+  return /^[0-9a-f]{32}$/i.test(chat) || /^chat[0-9]+$/i.test(chat) || chat !== "";
 }
 
 /**
@@ -163,16 +191,41 @@ export function isGroupChat(chat: string): boolean {
  * to me. Shared with thread.ts so the list and the bubbles agree.
  */
 export function dedupeSelfEcho(msgs: ImsgMessage[]): ImsgMessage[] {
-  const sentAt = new Set(msgs.filter((m) => m.from_me && m.text === "").map((m) => m.ts));
+  const contextKey = (m: ImsgMessage) => `${chatKey(m)}\u0000${m.handle || ""}\u0000${m.ts}`;
+  const contentKey = (m: ImsgMessage) => `${contextKey(m)}\u0000${m.text}`;
+  const selfContexts = new Set(msgs.filter((m) => m.self_chat === true).map(contextKey));
+  const emptySent = new Set(
+    msgs.filter((m) => m.self_chat === true && m.from_me && m.text === "").map(contextKey),
+  );
+  const selfText = new Map<string, number>();
+  const seenIds = new Set<string>();
   const out: ImsgMessage[] = [];
+
   for (const m of msgs) {
-    if (m.text === "") continue;
-    const idx = out.findIndex((o) => o.ts === m.ts && o.text === m.text && chatKey(o) === chatKey(m));
-    if (idx >= 0) {
-      if (m.from_me) out[idx] = { ...out[idx]!, from_me: true };
+    const id = m.id === undefined || m.id === null ? "" : String(m.id);
+    if (id && seenIds.has(id)) continue;
+    if (id) seenIds.add(id);
+
+    const context = contextKey(m);
+    // The empty outbound half of a known self echo is transport noise. Keep
+    // empty inbound rows: they can represent an attachment and are unread.
+    if (m.self_chat === true && m.from_me && m.text === "") continue;
+
+    if (selfContexts.has(context) && m.text !== "") {
+      const key = contentKey(m);
+      const idx = selfText.get(key);
+      if (idx !== undefined && out[idx]!.from_me !== m.from_me) {
+        if (m.from_me) out[idx] = { ...out[idx]!, from_me: true };
+        continue;
+      }
+      selfText.set(key, out.length);
+    }
+
+    if (emptySent.has(context) && !m.from_me) {
+      out.push({ ...m, from_me: true });
       continue;
     }
-    out.push(sentAt.has(m.ts) && !m.from_me ? { ...m, from_me: true } : m);
+    out.push(m);
   }
   return out;
 }
@@ -211,6 +264,7 @@ export function buildThreads(
   watermark: string,
   readMarks: Record<string, string> = {},
   groups: Record<string, GroupInfo> = {},
+  unreadCounts?: Record<string, number>,
 ): Thread[] {
   const byHandle = new Map<string, string>();
   for (const m of msgs) if (m.name && m.handle && !byHandle.has(m.handle)) byHandle.set(m.handle, m.name);
@@ -227,9 +281,11 @@ export function buildThreads(
     const sorted = [...list].sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
     const last = sorted[sorted.length - 1]!;
     const mark = readMarks[chat] && readMarks[chat]! > watermark ? readMarks[chat]! : watermark;
-    const unread = watermark
-      ? sorted.filter((m) => !m.from_me && m.ts > mark).length
-      : 0;
+    const unread = unreadCounts
+      ? unreadCounts[chat] ?? 0
+      : watermark
+        ? sorted.filter((m) => !m.from_me && m.ts > mark).length
+        : 0;
     threads.push({
       chat,
       guid: isGroupChat(chat) ? groups[chat]?.guid ?? "" : "",
@@ -248,9 +304,20 @@ export function buildThreads(
   return threads;
 }
 
-/** Stable key for one message, used to suppress repeat toasts. */
+function digest(value: string): string {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+function normalizeToastKey(value: string): string {
+  return /^sha256:[0-9a-f]{64}$/.test(value) ? value : digest(value);
+}
+
+/** Stable opaque key for one message, used to suppress repeat toasts. */
 export function toastKey(m: ImsgMessage): string {
-  return `${m.ts}|${chatKey(m)}|${m.text}`;
+  const identity = m.id === undefined || m.id === null
+    ? `${m.ts}|${chatKey(m)}|${m.handle}|${m.text}`
+    : `chat.db:${m.id}`;
+  return digest(identity);
 }
 
 /**
@@ -280,7 +347,7 @@ export function selectToasts(
     const key = toastKey(m);
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ chat: chatKey(m), name: m.name ?? m.handle, text: m.text, ts: m.ts });
+    out.push({ chat: chatKey(m), name: m.name ?? m.handle, text: m.text, ts: m.ts, key });
   }
   return out;
 }
@@ -300,15 +367,18 @@ export interface FetchResult {
   msgs: ImsgMessage[];
 }
 
-/** Call the imsg shim. Exit 69 is its documented "fnix unreachable" code. */
+/**
+ * Call the imsg shim. Offline is exit 69 (our guard shim) or 255 (a bare ssh
+ * failure through claude-on-mac's remote shim, which has no guard of its own).
+ */
 export function fetchMessages(limit: number, runner = spawnSync): FetchResult {
   const res = runner(`${HOME}/bin/imsg`, ["--json", "recent", String(limit)], {
     encoding: "utf8",
     timeout: 15000,
   });
 
-  if (res.status === 69) {
-    return { ok: false, online: false, error: "fnix unreachable", msgs: [] };
+  if (res.status === 69 || res.status === 255) {
+    return { ok: false, online: false, error: "Mac unreachable", msgs: [] };
   }
   if (res.status !== 0) {
     const err = (res.stderr || "").toString().trim().split("\n")[0] || `imsg exit ${res.status}`;
@@ -323,9 +393,55 @@ export function fetchMessages(limit: number, runner = spawnSync): FetchResult {
   }
 }
 
-/** `imsg groups` — a vic-side shim subcommand over sqlite on fnix. */
+/**
+ * Fetch every row still newer than its global/per-thread read mark. This is
+ * separate from the bounded preview fetch so the badge remains exact even
+ * when old unread messages fall outside the latest 150 rows.
+ */
+export function fetchPendingMessages(
+  readMark: string,
+  readMarks: Record<string, string>,
+  runner = spawnSync,
+): FetchResult {
+  if (!readMark) return { ok: true, online: true, error: "", msgs: [] };
+  const res = runner(`${HOME}/bin/imsg`, ["--json", "pending"], {
+    encoding: "utf8",
+    timeout: 15000,
+    input: JSON.stringify({ readMark, readMarks }),
+  });
+
+  if (res.status === 69) return { ok: false, online: false, error: "fnix unreachable", msgs: [] };
+  if (res.status !== 0) {
+    const err = (res.stderr || "").toString().trim().split("\n")[0] || `imsg exit ${res.status}`;
+    return { ok: false, online: true, error: err, msgs: [] };
+  }
+  try {
+    const parsed = JSON.parse(res.stdout as string);
+    if (!Array.isArray(parsed)) throw new Error("not an array");
+    return { ok: true, online: true, error: "", msgs: parsed as ImsgMessage[] };
+  } catch (e) {
+    return { ok: false, online: true, error: `bad JSON from imsg pending: ${e}`, msgs: [] };
+  }
+}
+
+export function unreadCounts(
+  msgs: ImsgMessage[],
+  readMark: string,
+  readMarks: Record<string, string>,
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  if (!readMark) return counts;
+  for (const m of msgs) {
+    const chat = chatKey(m);
+    const mark = readMarks[chat] && readMarks[chat]! > readMark ? readMarks[chat]! : readMark;
+    if (!m.from_me && m.ts > mark) counts[chat] = (counts[chat] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/** `imsg --json groups` — claude-on-mac ≥ 1.4.0. */
 export function fetchGroups(runner = spawnSync): Record<string, GroupInfo> | null {
-  const res = runner(`${HOME}/bin/imsg`, ["groups"], { encoding: "utf8", timeout: 15000 });
+  const res = runner(`${HOME}/bin/imsg`, ["--json", "groups"], { encoding: "utf8", timeout: 15000 });
   if (res.status !== 0) return null;
   try {
     const rows = JSON.parse(res.stdout as string);
@@ -336,7 +452,9 @@ export function fetchGroups(runner = spawnSync): Record<string, GroupInfo> | nul
       out[r.chat] = {
         name: typeof r.name === "string" ? r.name : "",
         guid: typeof r.guid === "string" ? r.guid : "",
-        participants: typeof r.participants === "string" ? r.participants.split(",").filter(Boolean) : [],
+        participants: Array.isArray(r.participants)
+          ? r.participants.filter((h: unknown) => typeof h === "string")
+          : typeof r.participants === "string" ? r.participants.split(",").filter(Boolean) : [],
       };
     }
     return out;
@@ -361,6 +479,7 @@ export function collect(deep: boolean, markRead = false, readChat = ""): BlipOut
       unread: 0,
       threads: [],
       toast: [],
+      persisted: true,
     };
   }
 
@@ -375,23 +494,46 @@ export function collect(deep: boolean, markRead = false, readChat = ""): BlipOut
   // keep the last good copy if the lookup fails.
   const groups = (deep ? fetchGroups() : null) ?? state.groups;
   const msgs = dedupeSelfEcho(fetched.msgs);
-  const threads = buildThreads(msgs, readMark, readMarks, groups);
+  const pending = markRead
+    ? { ok: true, online: true, error: "", msgs: [] } satisfies FetchResult
+    : fetchPendingMessages(state.readMark, state.readMarks);
+  const exactCounts = pending.ok
+    ? unreadCounts(dedupeSelfEcho(pending.msgs), readMark, readMarks)
+    : undefined;
+  const threads = buildThreads(msgs, readMark, readMarks, groups, exactCounts);
   const toast = selectToasts(msgs, state.watermark, loadAllowlist(), state.toasted);
-  const unread = threads.reduce((n, t) => n + t.unread, 0);
+  const unread = exactCounts
+    ? Object.values(exactCounts).reduce((n, count) => n + count, 0)
+    : threads.reduce((n, t) => n + t.unread, 0);
 
   // Both marks advance only on a good fetch, so an outage cannot silently
   // swallow the messages that arrived during it.
-  saveState({
+  const persisted = saveState({
     watermark: highest,
     // First ever run: adopt the current high-water rather than reporting the
     // whole 60-message window as unread the moment the plugin is installed.
     readMark: state.readMark === "" ? highest : readMark,
     readMarks,
     groups,
-    toasted: [...state.toasted, ...toast.map((t) => `${t.ts}|${t.chat}|${t.text}`)],  // == toastKey
+    toasted: [...state.toasted, ...toast.map((t) => t.key)],
   });
 
-  return { ok: true, online: true, error: "", ts: now, unread, threads, toast };
+  const warning = !persisted
+    ? "state write failed; notifications paused"
+    : !pending.ok
+      ? `unread count degraded: ${pending.error}`
+      : "";
+  return {
+    ok: true,
+    online: true,
+    error: warning,
+    ts: now,
+    unread,
+    threads,
+    // Never emit notifications that could not be committed to the dedupe ring.
+    toast: persisted ? toast : [],
+    persisted,
+  };
 }
 
 if (import.meta.main) {
@@ -405,7 +547,7 @@ if (import.meta.main) {
     console.log(
       JSON.stringify({
         ok: false, online: false, error: String(e), ts: new Date().toISOString(),
-        unread: 0, threads: [], toast: [],
+        unread: 0, threads: [], toast: [], persisted: false,
       }),
     );
   }

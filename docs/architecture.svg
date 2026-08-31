@@ -43,7 +43,7 @@
     <rect width="350" height="186" rx="14" fill="#101a2e" stroke="#5fd7ff" stroke-opacity=".5"/>
     <text x="175" y="26" font-size="13" font-weight="700" fill="#e6edf7" text-anchor="middle">Linux · Omarchy · client</text>
     <rect x="14" y="40" width="140" height="28" rx="6" fill="#ffffff" fill-opacity=".06"/>
-    <text x="84" y="58" font-size="10" fill="#9aa7bd" text-anchor="middle">bridge/linux shims</text>
+    <text x="84" y="58" font-size="10" fill="#9aa7bd" text-anchor="middle">claude-on-mac shims</text>
     <rect x="176" y="40" width="160" height="28" rx="6" fill="#ffffff" fill-opacity=".06"/>
     <text x="256" y="58" font-size="10" fill="#9aa7bd" text-anchor="middle">collector.ts · thread.ts</text>
     <path d="M154 54 L176 54" stroke="#7d8aa3" stroke-width="1.5" marker-end="url(#arr2)"/>

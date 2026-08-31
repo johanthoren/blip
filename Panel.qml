@@ -56,7 +56,9 @@ Panel {
   property bool bubbleFocused: false // a bubble's TextEdit has focus (text selection in progress)
 
   readonly property bool inThread: active !== null
-  readonly property bool activeIsGroup: inThread && /^[0-9a-f]{32}$/i.test(String(active.chat || ""))
+  // Same rule as collector.isGroupChat(): anything that is not a phone/email.
+  function isGroupId(c) { c = String(c || ""); return c !== "" && !/^\+?[0-9]{5,}$/.test(c) && c.indexOf("@") < 0 }
+  readonly property bool activeIsGroup: inThread && isGroupId(active.chat)
 
   /**
    * DMs send --to the chat id (a phone/email). Groups send --chat-id with the
@@ -68,7 +70,7 @@ Panel {
   function isSendable(t) {
     if (!t) return false
     var c = String(t.chat || "")
-    if (/^[0-9a-f]{32}$/i.test(c)) return /^[A-Za-z]+;[+-];[0-9a-f]{32}$/i.test(String(t.guid || ""))
+    if (isGroupId(c)) return /^[A-Za-z]+;[+-];.+$/.test(String(t.guid || ""))
     return /^\+?[0-9]{5,}$/.test(c) || c.indexOf("@") > 0
   }
 

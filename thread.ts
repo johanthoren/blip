@@ -174,8 +174,8 @@ export function loadThread(
     timeout: 15000,
   });
 
-  if (res.status === 69) {
-    return { ok: false, online: false, error: "fnix unreachable", bubbles: [] };
+  if (res.status === 69 || res.status === 255) {
+    return { ok: false, online: false, error: "Mac unreachable", bubbles: [] };
   }
   if (res.status !== 0) {
     const err = (res.stderr || "").toString().trim().split("\n")[0] || `imsg exit ${res.status}`;

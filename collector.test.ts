@@ -145,6 +145,16 @@ describe("isGroupChat", () => {
   test("32 hex = group", () => expect(isGroupChat("053856bb0d9a40e392db59eace1c56d1")).toBe(true));
   test("phone = DM", () => expect(isGroupChat("+15550100003")).toBe(false));
   test("email = DM", () => expect(isGroupChat("someone@icloud.com")).toBe(false));
+  test("chat<digits> = group (seen live)", () => expect(isGroupChat("chat640665907856941413")).toBe(true));
+  test("an unknown shape is a group, never a DM target", () => expect(isGroupChat("weird-id")).toBe(true));
+  test("exit 255 (ssh failure via claude-on-mac shim) reads as offline", () => {
+    const r = fetchMessages(10, (() => ({ status: 255, stdout: "", stderr: "ssh: connect" })) as never);
+    expect(r.online).toBe(false);
+  });
+  test("groups JSON with an array of participants (claude-on-mac 1.4)", () => {
+    const g = fetchGroups((() => ({ status: 0, stdout: JSON.stringify([{ chat: "chat1", guid: "any;+;chat1", name: "", participants: ["+1", "+2"], last: null }]), stderr: "" })) as never);
+    expect(g!.chat1.participants).toEqual(["+1", "+2"]);
+  });
 });
 
 describe("self-echo in the thread list", () => {
@@ -395,7 +405,7 @@ describe("fetchMessages", () => {
     const r = fetchMessages(10, fake({ status: 69 }));
     expect(r.ok).toBe(false);
     expect(r.online).toBe(false);
-    expect(r.error).toBe("fnix unreachable");
+    expect(r.error).toBe("Mac unreachable");
   });
 
   test("a non-zero exit surfaces the first stderr line", () => {

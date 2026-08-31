@@ -6,8 +6,10 @@ treating a Mac as the gateway. Read this before touching anything.
 ## Shape
 
 ```
-bridge/mac/   imsg, imsg-send      run ON the Mac. sqlite read of chat.db; AppleScript send.
-bridge/linux/ imsg, imsg-send      run on Linux. ssh shims to the Mac (host from BLIP_MAC_HOST, default `mac`). `imsg groups` lives here.
+(Mac side)    imsg, imsg-send      from github.com/nixfred/claude-on-mac ≥ 1.4.0 — sqlite read of chat.db;
+                                    AppleScript send; `imsg --json groups`; Recently Deleted hidden.
+(Linux side)  ~/bin/imsg, imsg-send claude-on-mac's bin/remote/ ssh shims (CLAUDE_ON_MAC_TARGET), or any
+                                    equivalent that execs the Mac tool over ssh. Blip only calls ~/bin/imsg*.
 collector.ts                        poll → {threads, unread, toast}. Pure functions + one spawn.
 thread.ts                           one conversation → decorated bubbles. Pure + one spawn.
 BarWidget.qml                       the single poller, badge, toasts, IPC.
@@ -35,8 +37,10 @@ what it is handed. Keep it that way.
 - **No message content on disk.** `~/.local/state/blip/state.json` holds
   timestamps, a toast-dedupe ring, and group metadata. Nothing else.
 - **`chat:null` exists.** Use `chatKey()`; never `String(m.chat)`.
+- **Group ids come in two shapes**: 32 hex, or `chat<digits>`. `isGroupChat()` is
+  "not a phone/email" — never a positive regex on one shape.
 - **Deleted messages stay in chat.db for 30 days** (`chat_recoverable_message_join`).
-  `bridge/mac/imsg` hides them; do not "optimise" that subquery away.
+  claude-on-mac's `imsg` hides them (1.4.0+); Blip assumes that.
 
 ## Working on it
 
