@@ -54,8 +54,11 @@ changes to the Mac beyond claude-on-mac updates.
   Needs `imsg thread --chat <id>` on the Mac side to load groups by chat id.
 - [ ] **New-conversation composer** — contact picker from the AddressBook map.
 - [ ] **Reply from the toast** — `notify-send` action buttons → inline reply.
-- [ ] **Real-time push** — launchd watcher on chat.db pinging over the SSH mux
-  (clipsync pattern) → sub-second delivery instead of the 6 s poll.
+- [x] **Real-time push** — shipped 1.1.0: `imsg watch` (claude-on-mac 1.7.0)
+  emits content-free pings on chat.db/WAL mtime change; Blip debounces 250 ms
+  into a refresh AND reloads the open conversation in parallel. Poll stretches
+  6 s → 60 s while `push=true` (see `status`); watcher restarts 8 s after any
+  exit. Measured ~2 s message-to-screen (was ≤6 s poll + serial reload).
 - [ ] **Link previews** — parse rich-link payload attachments for title/image.
 
 ## Tier 4 — the actual app

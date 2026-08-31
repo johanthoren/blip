@@ -74,6 +74,11 @@ Linux side. If the Mac is asleep, the widget dims and says so.
 - desktop notification only for senders on your allowlist
 - everything else still counts and still shows; it just doesn't interrupt you
 
+**Real-time**
+- a push watcher on the Mac pings when chat.db changes — messages land in
+  ~2 s, the open conversation refreshes itself, and the poll drops to a
+  60 s safety net (`status` shows `push=true`)
+
 </td>
 </tr>
 </table>

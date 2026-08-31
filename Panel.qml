@@ -102,6 +102,24 @@ Panel {
   property string reloadChat: ""
 
   readonly property bool inThread: active !== null
+  // last_ts of the open conversation as of its last load — the push watcher
+  // refreshes the thread list, and when OUR thread advances, the bubbles
+  // reload themselves. The guard makes unchanged refreshes free.
+  property string activeLastTs: ""
+  onThreadsChanged: {
+    if (!inThread) return
+    for (var i = 0; i < threads.length; i++) {
+      var t = threads[i]
+      if (String(t.chat) !== String(active.chat)) continue
+      if (String(t.last_ts) !== activeLastTs) {
+        activeLastTs = String(t.last_ts)
+        active = t              // fresher name/guid too (a group can BECOME sendable)
+        pinToBottom = true
+        requestThreadLoad(String(t.chat))
+      }
+      return
+    }
+  }
   // Same rule as collector.isGroupChat(): anything that is not a phone/email.
   function isGroupId(c) { c = String(c || ""); return c !== "" && !/^\+?[0-9]{5,}$/.test(c) && c.indexOf("@") < 0 }
   readonly property bool activeIsGroup: inThread && isGroupId(active.chat)
@@ -162,6 +180,7 @@ Panel {
   function openThread(t) {
     if (!t) return
     active = t
+    activeLastTs = String(t.last_ts || "")
     bubbles = []
     note = ""
     loading = true
@@ -322,6 +341,15 @@ Panel {
     searchResults = []
     searchProc.command = ["bun", root.searchScript, q, "40"]
     searchProc.running = true
+  }
+
+  /** Push ping while this conversation is open: reload its bubbles now,
+   *  without waiting for the collector round-trip. Cheap when nothing
+   *  changed; the thread loader already serializes concurrent requests. */
+  function pushReload() {
+    if (!inThread || threadProc.running && pendingThreadChat !== "") return
+    pinToBottom = true
+    requestThreadLoad(String(active.chat))
   }
 
   /** IPC hook (`find <query>`): drive the exact search path minus the keyboard. */

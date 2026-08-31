@@ -157,13 +157,57 @@ BarWidget {
   }
 
   Timer {
-    interval: 6000
+    // With the push watcher connected this is only a safety net; without it
+    // (fnix down, watcher restarting) it is the old 6 s poll.
+    interval: root.watchAlive ? 60000 : 6000
     running: true
     repeat: true
     triggeredOnStart: true
     // While the panel is open keep the wide window, or the list would shrink
     // from 40 threads to 14 on the next tick.
     onTriggered: root.refresh(panelLoader.item && panelLoader.item.opened === true, false)
+  }
+
+  // ------------------------------------------------- real-time push
+  // `imsg watch` blocks on fnix and emits one line per chat.db change — an
+  // INVALIDATION, no content (BlueFerry's design: session-visible push
+  // channels carry "something changed", clients fetch privately). Each ping
+  // debounces into the normal refresh, so a burst of messages costs one
+  // fetch. The ssh session rides the same ControlMaster mux as everything
+  // else; if it dies (sleep, network), a timer restarts it and the 6 s poll
+  // resumes in the meantime.
+  property bool watchAlive: false
+  Process {
+    id: watchProc
+    command: [root.home + "/bin/imsg", "watch"]
+    running: true
+    stdout: SplitParser {
+      onRead: function(line) {
+        if (String(line).trim() === "ready") { root.watchAlive = true; return }
+        pingDebounce.restart()
+      }
+    }
+    onExited: {
+      root.watchAlive = false
+      watchRestart.restart()
+    }
+  }
+  Timer {
+    id: pingDebounce
+    interval: 250
+    onTriggered: {
+      var panel = panelLoader.item
+      root.refresh(panel && panel.opened === true, false)
+      // Reload the OPEN conversation in parallel — waiting for the collector
+      // and then reloading serially added a visible second of latency.
+      if (panel && panel.opened === true && typeof panel.pushReload === "function")
+        panel.pushReload()
+    }
+  }
+  Timer {
+    id: watchRestart
+    interval: 8000
+    onTriggered: watchProc.running = true
   }
 
   // ------------------------------------------------------------ toasts
@@ -212,6 +256,7 @@ BarWidget {
     function status(): string {
       return "online=" + root.online + " unread=" + root.unread
         + " threads=" + root.threads.length + " healthy=" + root.healthy
+        + " push=" + root.watchAlive
         + (root.lastError !== "" ? " error=" + root.lastError : "")
     }
     function threads(): string { return JSON.stringify(root.threads) }
