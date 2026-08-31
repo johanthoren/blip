@@ -7,7 +7,7 @@ treating a Mac as the gateway. Read this before touching anything.
 
 ```
 bridge/mac/   imsg, imsg-send      run ON the Mac. sqlite read of chat.db; AppleScript send.
-bridge/vic/   imsg, imsg-send      run on Linux. ssh shims to the Mac. `imsg groups` lives here.
+bridge/linux/ imsg, imsg-send      run on Linux. ssh shims to the Mac (host from BLIP_MAC_HOST, default `mac`). `imsg groups` lives here.
 collector.ts                        poll → {threads, unread, toast}. Pure functions + one spawn.
 thread.ts                           one conversation → decorated bubbles. Pure + one spawn.
 BarWidget.qml                       the single poller, badge, toasts, IPC.

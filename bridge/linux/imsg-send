@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# imsg-send (Linux) — thin client for the Mac's AppleScript send bridge.
+#
+# Sends via Messages.app on the Mac. Like the backend, this is DRY RUN unless you
+# pass --yes. sshd inherits the Automation grant that cron does not.
+# Backend: <mac>:~/bin/imsg-send
+#
+# Usage: imsg-send --to <handle> [--yes] <text>...
+#        imsg-send --self [--yes] <text>...
+set -euo pipefail
+
+# The Mac that holds chat.db — an ssh Host alias from ~/.ssh/config.
+MAC="${BLIP_MAC_HOST:-mac}"
+
+if ! ssh -o ConnectTimeout=5 "$MAC" true 2>/dev/null; then
+  echo "imsg-send: $MAC unreachable — cannot send, the bridge is offline." >&2
+  exit 69
+fi
+
+exec ssh "$MAC" "PATH=/opt/homebrew/bin:\$PATH python3 \$HOME/bin/imsg-send ${*@Q}"

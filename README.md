@@ -20,6 +20,12 @@
 
 ---
 
+> ### ⚠️ You need a Mac. That is the whole trick.
+> Blip does **not** reimplement iMessage. Apple's protocol only runs on Apple
+> hardware, so Blip uses a Mac you already own — any Mac signed into your
+> Apple ID, awake and reachable over SSH — as the gateway. The Linux side is a
+> thin client. **No Mac, no Blip.** When the Mac sleeps, Blip dims and waits.
+
 ## Why this exists
 
 iMessage is macOS-only. Everyone who lives on Linux and owns an iPhone knows the
@@ -94,6 +100,13 @@ enough to poll, fast enough that the panel feels local.
 
 ## Install
 
+**Requirements**
+
+- A Mac signed into Messages with your Apple ID (a Mac mini in a closet is
+  perfect), reachable from the Linux box over SSH — LAN or Tailscale.
+- *Messages in iCloud* on, so the Mac's `chat.db` mirrors your phone.
+- Linux: [Omarchy](https://omarchy.org), `bun`, `notify-send`, `wl-copy`.
+
 **On the Mac**
 
 1. Copy `bridge/mac/imsg` and `bridge/mac/imsg-send` to `~/bin/`, `chmod +x`.
@@ -107,16 +120,17 @@ enough to poll, fast enough that the panel feels local.
 **On Linux**
 
 ```sh
-# ~/.ssh/config — name the host `fnix` or edit the shims
-Host fnix
-  HostName <mac-ip-or-tailscale>
-  User <you>
+# ~/.ssh/config — the shims look for a Host named `mac`
+# (override with BLIP_MAC_HOST=<alias> in your environment)
+Host mac
+  HostName <mac-ip-or-tailscale-name>
+  User <your-mac-user>
   ControlMaster auto
   ControlPath ~/.ssh/cm/%r@%h:%p
   ControlPersist 10m
 mkdir -p ~/.ssh/cm
 
-cp bridge/vic/imsg bridge/vic/imsg-send ~/bin/ && chmod +x ~/bin/imsg*
+cp bridge/linux/imsg bridge/linux/imsg-send ~/bin/ && chmod +x ~/bin/imsg*
 imsg recent 5                                  # if this prints messages, the bridge is up
 
 git clone https://github.com/nixfred/blip ~/.config/omarchy/plugins/nixfred.blip
@@ -164,7 +178,7 @@ poll. Yes, that shipped once.
 **Groups send by GUID.** `imsg` reports a group as a bare 32-hex
 `chat_identifier`; AppleScript's `chat id` wants the full `any;+;<id>`. A
 group's `handle` field is whichever member spoke last — send to *that* and you
-DM one person while the panel shows the group. `bridge/vic/imsg groups`
+DM one person while the panel shows the group. `bridge/linux/imsg groups`
 supplies the real GUID; a group whose GUID isn't cached yet is read-only rather
 than guessed.
 
@@ -189,7 +203,8 @@ The 273,000-message history stays on the Mac where it lives.
 - **Tapbacks, edits, replies-in-thread, outbound attachments.** AppleScript
   can't. If you need those, [BlueBubbles](https://bluebubbles.app) is the
   right tool and requires disabling SIP.
-- **Work while the Mac sleeps.** Inherent. The widget dims and tells you.
+- **Work without a Mac, or while the Mac sleeps.** Inherent to the approach.
+  The widget dims and tells you.
 
 ## Development
 
