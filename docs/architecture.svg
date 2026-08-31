@@ -16,45 +16,45 @@
     <text x="35" y="140" font-size="11" fill="#9aa7bd" text-anchor="middle">iPhone</text>
   </g>
   <path d="M114 150 L206 150" stroke="#7d8aa3" stroke-width="2" stroke-dasharray="5 5" marker-end="url(#arr2)" marker-start="url(#arr2)"/>
-  <text x="160" y="138" font-size="10" fill="#7d8aa3" text-anchor="middle">Messages in iCloud</text>
+  <text x="160" y="172" font-size="10" fill="#7d8aa3" text-anchor="middle">Messages</text><text x="160" y="185" font-size="10" fill="#7d8aa3" text-anchor="middle">in iCloud</text>
 
   <!-- the Mac -->
   <g transform="translate(212 78)">
-    <rect width="220" height="150" rx="14" fill="#101a2e" stroke="#5fd7ff" stroke-opacity=".5"/>
-    <text x="110" y="26" font-size="13" font-weight="700" fill="#e6edf7" text-anchor="middle">the Mac · gateway</text>
-    <rect x="16" y="40" width="188" height="28" rx="6" fill="#0a84ff" fill-opacity=".14"/>
-    <text x="110" y="58" font-size="11" fill="#e6edf7" text-anchor="middle">Messages.app · chat.db</text>
-    <rect x="16" y="76" width="88" height="26" rx="6" fill="#ffffff" fill-opacity=".06"/>
-    <text x="60" y="93" font-size="11" fill="#9aa7bd" text-anchor="middle">imsg</text>
-    <rect x="116" y="76" width="88" height="26" rx="6" fill="#ffffff" fill-opacity=".06"/>
-    <text x="160" y="93" font-size="11" fill="#9aa7bd" text-anchor="middle">imsg-send</text>
-    <text x="60" y="122" font-size="9" fill="#7d8aa3" text-anchor="middle">sqlite read-only</text>
-    <text x="160" y="122" font-size="9" fill="#7d8aa3" text-anchor="middle">AppleScript</text>
-    <text x="110" y="142" font-size="9" fill="#5fd7ff" text-anchor="middle">sshd holds FDA + Automation TCC</text>
+    <rect width="190" height="150" rx="14" fill="#101a2e" stroke="#5fd7ff" stroke-opacity=".5"/>
+    <text x="95" y="26" font-size="13" font-weight="700" fill="#e6edf7" text-anchor="middle">the Mac · gateway</text>
+    <rect x="12" y="40" width="166" height="28" rx="6" fill="#0a84ff" fill-opacity=".14"/>
+    <text x="95" y="58" font-size="11" fill="#e6edf7" text-anchor="middle">Messages.app · chat.db</text>
+    <rect x="12" y="76" width="78" height="26" rx="6" fill="#ffffff" fill-opacity=".06"/>
+    <text x="51" y="93" font-size="11" fill="#9aa7bd" text-anchor="middle">imsg</text>
+    <rect x="100" y="76" width="78" height="26" rx="6" fill="#ffffff" fill-opacity=".06"/>
+    <text x="139" y="93" font-size="11" fill="#9aa7bd" text-anchor="middle">imsg-send</text>
+    <text x="51" y="122" font-size="9" fill="#7d8aa3" text-anchor="middle">sqlite ro</text>
+    <text x="139" y="122" font-size="9" fill="#7d8aa3" text-anchor="middle">AppleScript</text>
+    <text x="95" y="142" font-size="8.5" fill="#5fd7ff" text-anchor="middle">sshd has FDA + Automation TCC</text>
   </g>
 
   <!-- ssh pipe -->
-  <path d="M436 140 L520 140" stroke="#5fd7ff" stroke-width="3" marker-end="url(#arr)" marker-start="url(#arr)"/>
-  <text x="478" y="126" font-size="10" fill="#5fd7ff" text-anchor="middle">ssh · ControlMaster</text>
-  <text x="478" y="162" font-size="10" fill="#7d8aa3" text-anchor="middle">one socket · ~47 ms</text>
+  <path d="M408 150 L538 150" stroke="#5fd7ff" stroke-width="3" marker-end="url(#arr)" marker-start="url(#arr)"/>
+  <text x="473" y="136" font-size="10" fill="#5fd7ff" text-anchor="middle">ssh · ControlMaster</text>
+  <text x="473" y="170" font-size="10" fill="#7d8aa3" text-anchor="middle">one socket · ~47 ms</text>
 
   <!-- the Linux box -->
-  <g transform="translate(524 60)">
-    <rect width="360" height="186" rx="14" fill="#101a2e" stroke="#5fd7ff" stroke-opacity=".5"/>
-    <text x="180" y="26" font-size="13" font-weight="700" fill="#e6edf7" text-anchor="middle">Linux · Omarchy · client</text>
-    <rect x="16" y="40" width="150" height="28" rx="6" fill="#ffffff" fill-opacity=".06"/>
-    <text x="91" y="58" font-size="11" fill="#9aa7bd" text-anchor="middle">bridge/vic shims</text>
-    <rect x="194" y="40" width="150" height="28" rx="6" fill="#ffffff" fill-opacity=".06"/>
-    <text x="269" y="58" font-size="11" fill="#9aa7bd" text-anchor="middle">collector.ts · thread.ts</text>
-    <path d="M166 54 L194 54" stroke="#7d8aa3" stroke-width="1.5" marker-end="url(#arr2)"/>
-    <rect x="16" y="86" width="328" height="28" rx="6" fill="#0a84ff" fill-opacity=".14"/>
-    <text x="180" y="104" font-size="11" fill="#e6edf7" text-anchor="middle">BarWidget.qml · Panel.qml   (QuickShell)</text>
-    <path d="M269 68 L269 86" stroke="#7d8aa3" stroke-width="1.5" marker-end="url(#arr2)"/>
-    <rect x="16" y="128" width="150" height="24" rx="6" fill="#ffffff" fill-opacity=".04"/>
-    <text x="91" y="144" font-size="10" fill="#7d8aa3" text-anchor="middle">~/.local/state/blip</text>
-    <rect x="194" y="128" width="150" height="24" rx="6" fill="#ffffff" fill-opacity=".04"/>
-    <text x="269" y="144" font-size="10" fill="#7d8aa3" text-anchor="middle">~/.config/blip/allowlist</text>
-    <text x="180" y="172" font-size="9" fill="#5fd7ff" text-anchor="middle">no message content is ever cached on disk</text>
+  <g transform="translate(544 60)">
+    <rect width="350" height="186" rx="14" fill="#101a2e" stroke="#5fd7ff" stroke-opacity=".5"/>
+    <text x="175" y="26" font-size="13" font-weight="700" fill="#e6edf7" text-anchor="middle">Linux · Omarchy · client</text>
+    <rect x="14" y="40" width="140" height="28" rx="6" fill="#ffffff" fill-opacity=".06"/>
+    <text x="84" y="58" font-size="10" fill="#9aa7bd" text-anchor="middle">bridge/vic shims</text>
+    <rect x="176" y="40" width="160" height="28" rx="6" fill="#ffffff" fill-opacity=".06"/>
+    <text x="256" y="58" font-size="10" fill="#9aa7bd" text-anchor="middle">collector.ts · thread.ts</text>
+    <path d="M154 54 L176 54" stroke="#7d8aa3" stroke-width="1.5" marker-end="url(#arr2)"/>
+    <rect x="14" y="86" width="322" height="28" rx="6" fill="#0a84ff" fill-opacity=".14"/>
+    <text x="175" y="104" font-size="11" fill="#e6edf7" text-anchor="middle">BarWidget.qml · Panel.qml  (QuickShell)</text>
+    <path d="M256 68 L256 86" stroke="#7d8aa3" stroke-width="1.5" marker-end="url(#arr2)"/>
+    <rect x="14" y="128" width="140" height="24" rx="6" fill="#ffffff" fill-opacity=".04"/>
+    <text x="84" y="144" font-size="9.5" fill="#7d8aa3" text-anchor="middle">~/.local/state/blip</text>
+    <rect x="176" y="128" width="160" height="24" rx="6" fill="#ffffff" fill-opacity=".04"/>
+    <text x="256" y="144" font-size="9.5" fill="#7d8aa3" text-anchor="middle">~/.config/blip/allowlist</text>
+    <text x="175" y="172" font-size="9" fill="#5fd7ff" text-anchor="middle">no message content is ever cached on disk</text>
   </g>
 
   <text x="460" y="284" font-size="11" fill="#7d8aa3" text-anchor="middle">poll every 6 s  ·  toasts only for allowlisted senders  ·  badge counts everything</text>
