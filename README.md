@@ -153,6 +153,7 @@ is in your bar.
 | list | `j` / `k` · `↑` / `↓` | move |
 | list | `Enter` · `1`–`9` | open thread |
 | list | `r` | refresh |
+| list | `a` · *mark all read* link | clear every badge and dot (local only — iMessage itself is not told) |
 | thread | `Enter` | send |
 | thread | `Esc` | back to list (or clear a text selection first) |
 | anywhere | `Esc` | close |

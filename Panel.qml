@@ -140,6 +140,12 @@ Panel {
   /** IPC test hook: drive the exact user send path minus the keyboard.
    *  Keystroke injection (wtype) proved non-deterministic — a virtual
    *  keyboard's events can land on whatever surface Hyprland favors. */
+  /** Clear every badge/dot locally. Read state never goes back to iMessage. */
+  function markAllRead() {
+    if (!root.hostWidget || root.unread === 0) return
+    root.hostWidget.markAllRead()
+  }
+
   function composeAndSend(text) {
     if (!inThread) return "not in a thread"
     composeField.text = String(text || "")
@@ -295,6 +301,7 @@ Panel {
       onTextKey: function(text) {
         if (root.inThread) return
         if (text === "r" || text === "R") { if (root.hostWidget) root.hostWidget.refresh(true, false) }
+        else if (text === "a" || text === "A") root.markAllRead()
         else if (text >= "1" && text <= "9") {
           var i = Number(text) - 1
           if (i < root.threads.length) root.openThread(root.threads[i])
@@ -372,8 +379,29 @@ Panel {
                 foreground: root.foreground
                 fontFamily: root.fontFamily
               }
+              // Local only: moves readMark/readMarks in state.json so the
+              // badge and dots clear. Nothing is written back to the Mac —
+              // AppleScript cannot flip is_read (see "not possible" in CLAUDE.md).
               Text {
-                text: root.threads.length === 0 ? "" : "click, 1–9, or j/k+Enter"
+                id: markAllBtn
+                visible: root.unread > 0
+                text: "mark all read"
+                textFormat: Text.PlainText
+                color: markAllMouse.containsMouse ? root.mineFill : root.cyan
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.underline: markAllMouse.containsMouse
+                MouseArea {
+                  id: markAllMouse
+                  anchors.fill: parent
+                  anchors.margins: -Style.space(4)
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.markAllRead()
+                }
+              }
+              Text {
+                text: root.threads.length === 0 ? "" : (root.unread > 0 ? "· " : "") + "click, 1–9, or j/k+Enter"
                 textFormat: Text.PlainText
                 color: root.dim
                 font.family: root.fontFamily
