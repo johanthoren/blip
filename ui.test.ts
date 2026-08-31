@@ -1,0 +1,31 @@
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+
+const panel = readFileSync(new URL("./Panel.qml", import.meta.url), "utf8");
+const widget = readFileSync(new URL("./BarWidget.qml", import.meta.url), "utf8");
+
+describe("QML safety invariants", () => {
+  test("group sends use the cached AppleScript GUID", () => {
+    expect(panel).toContain('["--chat-id", String(root.active.guid)]');
+    expect(panel).toContain('["--to", sendChat]');
+  });
+
+  test("thread results are accepted only for the active chat", () => {
+    expect(panel).toContain('String(root.active.chat) === root.threadRunningChat');
+    expect(panel).toContain("if (!belongsHere) return");
+  });
+
+  test("send completion owns immutable chat and draft context", () => {
+    expect(panel).toContain("var completedChat = root.sendChat");
+    expect(panel).toContain("if (composeField.text === completedText) composeField.text = \"\"");
+  });
+
+  test("read marks are queued and only applied after a successful load", () => {
+    expect(widget).toContain("property var refreshQueue: []");
+    expect(widget).not.toContain("property var queued: null");
+    const success = panel.indexOf("if (d.ok === true)");
+    const mark = panel.indexOf("markThreadRead(root.threadRunningChat)");
+    expect(success).toBeGreaterThan(-1);
+    expect(mark).toBeGreaterThan(success);
+  });
+});

@@ -14,7 +14,7 @@
   <img alt="Omarchy" src="https://img.shields.io/badge/Omarchy-plugin-5fd7ff?style=flat-square">
   <img alt="QuickShell" src="https://img.shields.io/badge/QuickShell-QML-0a84ff?style=flat-square">
   <img alt="bun" src="https://img.shields.io/badge/bun-TypeScript-f9f1e1?style=flat-square">
-  <img alt="tests" src="https://img.shields.io/badge/tests-93%20passing-2ea043?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/tests-113%20passing-2ea043?style=flat-square">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square">
 </p>
 
@@ -82,7 +82,7 @@ Linux side. If the Mac is asleep, the widget dims and says so.
 ```
 Linux                                         Mac
 ─────                                         ───
-BarWidget.qml  ── every 6 s ──▶ collector.ts ──▶ ssh ──▶ imsg --json recent 150
+BarWidget.qml  ── every 6 s ──▶ collector.ts ──▶ ssh ──▶ imsg --json recent 150+
                                                           (sqlite, read-only)
 Panel.qml      ── open thread ─▶ thread.ts   ──▶ ssh ──▶ imsg --json thread <id> 80
 Panel.qml      ── Enter ───────────────────────▶ ssh ──▶ imsg-send --to <id> --yes -- "text"
@@ -173,6 +173,12 @@ it has *seen* — drives toasts) separate from `readMark` and per-thread
 dots). Fold them together and the badge flashes to 1 and resets on the next
 poll. Yes, that shipped once.
 
+**Unread is a ledger, not a window.** The latest 150 rows are enough for normal
+previews, but unread counts and oldest-unread timestamps live in a metadata-only
+per-chat ledger. Blip expands the fetch to cover new arrivals and the oldest
+outstanding unread, then rebuilds exact counts from that range. An unread cannot
+fall off the preview window or remain counted after deletion.
+
 **Groups send by GUID.** Message rows carry a group as a bare
 `chat_identifier` (32 hex, or `chat<digits>`); AppleScript's `chat id` wants
 the full `any;+;<id>`. A group's `handle` field is whichever member spoke last
@@ -190,8 +196,10 @@ Deleted" bin that is still in `chat.db`. claude-on-mac's `imsg` hides those rows
 a conversation you delete on the phone disappears from Blip within one poll of
 the iCloud sync. `IMSG_INCLUDE_DELETED=1` shows them again.
 
-**Nothing personal touches disk on Linux.** `~/.local/state/blip/state.json`
-holds timestamps, a toast-dedupe ring, and group names. No message text, ever.
+**No message bodies are stored on Linux.** `~/.local/state/blip/state.json`
+holds timestamps, unread counts, SHA-256 toast-dedupe keys, inferred self-chat
+ids, and group metadata. It is written atomically with mode `0600`; legacy
+plaintext toast keys are hashed on migration. No message text is persisted.
 The 273,000-message history stays on the Mac where it lives.
 
 ## What it can't do
@@ -207,7 +215,7 @@ The 273,000-message history stays on the Mac where it lives.
 ## Development
 
 ```sh
-bun test                                     # 93 tests, ~40 ms
+bun test                                     # 113 tests, ~50 ms
 bun collector.ts --deep | jq '.unread, (.threads|length)'
 bun thread.ts +15551234567 40 | jq '.bubbles[-1]'
 ```

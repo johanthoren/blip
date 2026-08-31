@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   buildThreads,
+  detectSelfChats,
+  fetchMessagesAfter,
   fetchGroups,
   groupName,
   dedupeSelfEcho,
@@ -17,6 +19,8 @@ import {
   saveState,
   selectToasts,
   toastKey,
+  unreadCounts,
+  unreadOldest,
   type ImsgMessage,
 } from "./collector";
 
@@ -163,7 +167,7 @@ describe("self-echo in the thread list", () => {
     const msgs = dedupeSelfEcho([
       msg({ chat: "+15550100001", handle: "+15550100001", ts: "2026-08-30 11:00:00", from_me: true, text: "note" }),
       msg({ chat: "+15550100001", handle: "+15550100001", ts: "2026-08-30 11:00:00", from_me: false, text: "note" }),
-    ]);
+    ], ["+15550100001"]);
     const threads = buildThreads(msgs, "2026-08-30 10:00:00");
     expect(threads[0]!.unread).toBe(0);
     expect(threads[0]!.last_from_me).toBe(true);
@@ -175,6 +179,33 @@ describe("self-echo in the thread list", () => {
       msg({ chat: "B", handle: "B", ts: "2026-08-30 11:00:00", text: "ok" }),
     ]);
     expect(msgs).toHaveLength(2);
+  });
+
+  test("an empty self row cannot reclassify another chat at the same second", () => {
+    const msgs = dedupeSelfEcho([
+      msg({ chat: "SELF", handle: "SELF", from_me: true, text: "", ts: "2026-08-30 11:00:00" }),
+      msg({ chat: "OTHER", handle: "OTHER", from_me: false, text: "urgent", ts: "2026-08-30 11:00:00" }),
+    ], ["SELF"]);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]!.chat).toBe("OTHER");
+    expect(msgs[0]!.from_me).toBe(false);
+  });
+
+  test("two group members saying the same thing in one second remain distinct", () => {
+    const chat = "053856bb0d9a40e392db59eace1c56d1";
+    const msgs = dedupeSelfEcho([
+      msg({ chat, handle: "ALICE", text: "yes" }),
+      msg({ chat, handle: "BOB", text: "yes" }),
+    ]);
+    expect(msgs).toHaveLength(2);
+  });
+
+  test("infers a self chat only from a matching empty-outbound twin", () => {
+    expect(detectSelfChats([
+      msg({ chat: "SELF", handle: "SELF", from_me: true, text: "" }),
+      msg({ chat: "SELF", handle: "SELF", from_me: false, text: "mine" }),
+      msg({ chat: "OTHER", handle: "OTHER", from_me: false, text: "theirs" }),
+    ])).toEqual(["SELF"]);
   });
 
   test("a named group uses its display_name", () => {
@@ -276,7 +307,7 @@ describe("selectToasts", () => {
   });
 
   test("suppresses a message already toasted — the self-thread echo guard", () => {
-    // In the self-thread, Larry's sent replies come back as from_me=false.
+    // In the self-thread, the user's sent replies come back as from_me=false.
     // Without this dedupe the loop would notify on its own output forever.
     const m = msg({ chat: "+15550100001", handle: "+15550100001", ts: "2026-08-30 11:00:00", text: "echo" });
     const out = selectToasts([m], "2026-08-30 10:00:00", ["+15550100001"], [toastKey(m)]);
@@ -287,6 +318,14 @@ describe("selectToasts", () => {
     const m = msg({ chat: "+15550100002", handle: "+15550100002", ts: "2026-08-30 11:00:00" });
     const out = selectToasts([m, { ...m }], "2026-08-30 10:00:00", allow, []);
     expect(out).toHaveLength(1);
+  });
+
+  test("persisted toast keys are opaque and distinguish group senders", () => {
+    const a = msg({ chat: "group", handle: "ALICE", text: "yes", ts: "2026-08-30 11:00:00" });
+    const b = msg({ chat: "group", handle: "BOB", text: "yes", ts: "2026-08-30 11:00:00" });
+    expect(toastKey(a)).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(toastKey(a)).not.toContain("yes");
+    expect(toastKey(a)).not.toBe(toastKey(b));
   });
 
   test("matches on handle when the chat id is an opaque GUID", () => {
@@ -331,30 +370,69 @@ describe("maxTs", () => {
 describe("state and allowlist I/O", () => {
   test("round-trips state", () => {
     const p = join(tmp(), "state.json");
-    saveState({ watermark: "2026-08-30 10:00:00", readMark: "2026-08-30 09:00:00", readMarks: { A: "x" }, groups: {}, toasted: ["a"] }, p);
+    const opaque = `sha256:${"a".repeat(64)}`;
+    expect(saveState({
+      watermark: "2026-08-30 10:00:00", readMark: "2026-08-30 09:00:00",
+      unreadCounts: { A: 2 }, unreadOldest: { A: "2026-08-30 09:01:00" },
+      unreadInitialized: true, selfChats: ["SELF"],
+      readMarks: { A: "x" }, groups: {}, toasted: [opaque],
+    }, p)).toBe(true);
     expect(loadState(p)).toEqual({
       watermark: "2026-08-30 10:00:00",
       readMark: "2026-08-30 09:00:00",
+      unreadCounts: { A: 2 },
+      unreadOldest: { A: "2026-08-30 09:01:00" },
+      unreadInitialized: true,
+      selfChats: ["SELF"],
       readMarks: { A: "x" },
       groups: {},
-      toasted: ["a"],
+      toasted: [opaque],
     });
+    expect(statSync(p).mode & 0o777).toBe(0o600);
   });
 
   test("a missing state file yields a safe empty watermark", () => {
-    expect(loadState(join(tmp(), "nope.json"))).toEqual({ watermark: "", readMark: "", readMarks: {}, groups: {}, toasted: [] });
+    expect(loadState(join(tmp(), "nope.json"))).toEqual({
+      watermark: "", readMark: "", unreadCounts: {}, unreadOldest: {}, unreadInitialized: false,
+      selfChats: [], readMarks: {}, groups: {}, toasted: [],
+    });
   });
 
   test("corrupt state does not throw", () => {
     const p = join(tmp(), "bad.json");
     writeFileSync(p, "{ this is not json");
-    expect(loadState(p)).toEqual({ watermark: "", readMark: "", readMarks: {}, groups: {}, toasted: [] });
+    expect(loadState(p)).toEqual({
+      watermark: "", readMark: "", unreadCounts: {}, unreadOldest: {}, unreadInitialized: false,
+      selfChats: [], readMarks: {}, groups: {}, toasted: [],
+    });
   });
 
   test("the toast ring is capped so the state file cannot grow forever", () => {
     const p = join(tmp(), "big.json");
-    saveState({ watermark: "x", readMark: "x", readMarks: {}, groups: {}, toasted: Array.from({ length: 500 }, (_, i) => `k${i}`) }, p);
+    saveState({
+      watermark: "x", readMark: "x", unreadCounts: {}, unreadOldest: {}, unreadInitialized: true,
+      selfChats: [], readMarks: {}, groups: {}, toasted: Array.from({ length: 500 }, (_, i) => `k${i}`),
+    }, p);
     expect(loadState(p).toasted).toHaveLength(200);
+  });
+
+  test("legacy toast keys are scrubbed before the next save", () => {
+    const p = join(tmp(), "legacy-text.json");
+    writeFileSync(p, JSON.stringify({ watermark: "x", readMark: "x", toasted: ["ts|chat|secret body"] }));
+    const state = loadState(p);
+    expect(state.toasted[0]).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(state.toasted[0]).not.toContain("secret body");
+    expect(saveState(state, p)).toBe(true);
+    expect(readFileSync(p, "utf8")).not.toContain("secret body");
+  });
+
+  test("a state write failure is reported", () => {
+    const blocker = join(tmp(), "not-a-directory");
+    writeFileSync(blocker, "x");
+    expect(saveState({
+      watermark: "x", readMark: "x", unreadCounts: {}, unreadOldest: {}, unreadInitialized: true,
+      selfChats: [], readMarks: {}, groups: {}, toasted: [],
+    }, join(blocker, "state.json"))).toBe(false);
   });
 
   test("a pre-two-mark state file inherits readMark from watermark", () => {
@@ -364,6 +442,17 @@ describe("state and allowlist I/O", () => {
     writeFileSync(p, JSON.stringify({ watermark: "2026-08-30 10:00:00", toasted: [] }));
     expect(loadState(p).readMark).toBe("2026-08-30 10:00:00");
     expect(loadState(p).readMarks).toEqual({});
+  });
+
+  test("a count-only ledger is reseeded so deletes can be reconciled", () => {
+    const p = join(tmp(), "count-only.json");
+    writeFileSync(p, JSON.stringify({
+      watermark: "2026-08-30 12:00:00",
+      readMark: "2026-08-30 10:00:00",
+      unreadCounts: { A: 2 },
+      unreadInitialized: true,
+    }));
+    expect(loadState(p).unreadInitialized).toBe(false);
   });
 
   test("reads a bare-array allowlist", () => {
@@ -400,7 +489,7 @@ describe("fetchMessages", () => {
     expect(r.msgs).toHaveLength(1);
   });
 
-  test("exit 69 reports fnix offline, not a crash", () => {
+  test("exit 69 reports the Mac offline, not a crash", () => {
     // 69 = EX_UNAVAILABLE, the documented code from the imsg shim's reachability guard.
     const r = fetchMessages(10, fake({ status: 69 }));
     expect(r.ok).toBe(false);
@@ -425,6 +514,77 @@ describe("fetchMessages", () => {
     const r = fetchMessages(10, fake({ status: 0, stdout: '{"oops":true}' }));
     expect(r.ok).toBe(false);
     expect(r.error).toContain("bad JSON");
+  });
+});
+
+describe("adaptive unread catch-up", () => {
+  test("expands until the previous watermark is inside the fetched window", () => {
+    const all = [
+      msg({ ts: "2026-08-30 12:04:00" }),
+      msg({ ts: "2026-08-30 12:03:00" }),
+      msg({ ts: "2026-08-30 12:02:00" }),
+      msg({ ts: "2026-08-30 11:59:00" }),
+    ];
+    const limits: number[] = [];
+    const fake = ((_cmd: string, args: string[]) => {
+      const limit = Number(args[2]);
+      limits.push(limit);
+      return { status: 0, stdout: JSON.stringify(all.slice(0, limit)), stderr: "" };
+    }) as never;
+    const result = fetchMessagesAfter("2026-08-30 12:00:00", 2, fake);
+    expect(result.ok).toBe(true);
+    expect(result.msgs).toHaveLength(4);
+    expect(limits).toEqual([2, 4]);
+  });
+
+  test("expands past an equal timestamp boundary", () => {
+    const all = [
+      msg({ ts: "2026-08-30 12:01:00", handle: "A" }),
+      msg({ ts: "2026-08-30 12:00:00", handle: "B" }),
+      msg({ ts: "2026-08-30 12:00:00", handle: "C" }),
+    ];
+    const limits: number[] = [];
+    const fake = ((_cmd: string, args: string[]) => {
+      const limit = Number(args[2]);
+      limits.push(limit);
+      return { status: 0, stdout: JSON.stringify(all.slice(0, limit)), stderr: "" };
+    }) as never;
+    expect(fetchMessagesAfter("2026-08-30 12:00:00", 2, fake).msgs).toHaveLength(3);
+    expect(limits).toEqual([2, 4]);
+  });
+
+  test("the unread ledger records counts and its reconciliation boundary", () => {
+    const rows = [
+      msg({ chat: "A", ts: "2026-08-30 11:00:00" }),
+      msg({ chat: "A", ts: "2026-08-30 10:30:00" }),
+      msg({ chat: "A", ts: "2026-08-30 11:01:00", from_me: true }),
+    ];
+    expect(unreadCounts(rows, "2026-08-30 10:00:00", {})).toEqual({ A: 2 });
+    expect(unreadOldest(rows, "2026-08-30 10:00:00", {})).toEqual({ A: "2026-08-30 10:30:00" });
+  });
+
+  test("rebuilding the covered unread range removes deleted rows", () => {
+    const rowsAfterDelete = [msg({ chat: "A", ts: "2026-08-30 11:00:00" })];
+    expect(unreadCounts(rowsAfterDelete, "2026-08-30 10:00:00", {})).toEqual({ A: 1 });
+    expect(unreadOldest(rowsAfterDelete, "2026-08-30 10:00:00", {})).toEqual({ A: "2026-08-30 11:00:00" });
+  });
+
+  test("exact ledger counts override the bounded thread window", () => {
+    const threads = buildThreads(
+      [msg({ chat: "A", ts: "2026-08-30 11:00:00" })],
+      "2026-08-30 10:00:00", {}, {}, { A: 151 },
+    );
+    expect(threads[0]!.unread).toBe(151);
+  });
+});
+
+describe("readMarks pruning", () => {
+  test("a per-thread mark at or below the global mark is dropped from state", () => {
+    // collect() prunes; emulate its rule directly.
+    const readMarks: Record<string, string> = { A: "2026-08-30 09:00:00", B: "2026-08-30 12:00:00" };
+    const readMark = "2026-08-30 10:00:00";
+    for (const [chat, ts] of Object.entries(readMarks)) if (ts <= readMark) delete readMarks[chat];
+    expect(Object.keys(readMarks)).toEqual(["B"]);
   });
 });
 

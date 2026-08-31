@@ -54,6 +54,11 @@ Panel {
   property int cursor: -1            // keyboard row selection in list view
   property bool pinToBottom: false   // scroll to the newest bubble once layout settles
   property bool bubbleFocused: false // a bubble's TextEdit has focus (text selection in progress)
+  property string threadRunningChat: "" // chat owned by the current threadProc
+  property string pendingThreadChat: "" // latest chat requested while it runs
+  property string sendChat: ""          // immutable context for the current send
+  property string sendText: ""
+  property string reloadChat: ""
 
   readonly property bool inThread: active !== null
   // Same rule as collector.isGroupChat(): anything that is not a phone/email.
@@ -79,6 +84,9 @@ Panel {
     bubbles = []
     note = ""
     cursor = -1
+    loading = false
+    pendingThreadChat = ""
+    composeField.text = ""
     // Deep fetch for a real thread list. Does NOT clear dots: like iMessage,
     // a thread stays marked until that conversation is opened.
     if (hostWidget) hostWidget.refresh(true, false)
@@ -98,6 +106,9 @@ Panel {
     active = null
     bubbles = []
     note = ""
+    loading = false
+    pendingThreadChat = ""
+    composeField.text = ""
     pinToBottom = false
     Qt.callLater(function() { flick.contentY = 0; keyCatcher.forceActiveFocus() })
   }
@@ -108,26 +119,43 @@ Panel {
     bubbles = []
     note = ""
     loading = true
-    threadProc.command = ["bun", root.threadScript, String(t.chat), "80"]
-    threadProc.running = true
-    if (hostWidget) hostWidget.markThreadRead(String(t.chat))
+    composeField.text = ""
+    requestThreadLoad(String(t.chat))
     Qt.callLater(function() { composeField.forceActiveFocus() })
+  }
+
+  function requestThreadLoad(chat) {
+    pendingThreadChat = String(chat || "")
+    if (!threadProc.running) startNextThreadLoad()
+  }
+
+  function startNextThreadLoad() {
+    if (threadProc.running || pendingThreadChat === "") return
+    threadRunningChat = pendingThreadChat
+    pendingThreadChat = ""
+    threadProc.command = ["bun", root.threadScript, threadRunningChat, "80"]
+    threadProc.running = true
   }
 
   function send() {
     var text = composeField.text
     if (!root.inThread || text.trim() === "") return
+    if (sendProc.running) {
+      note = "a message is already sending"
+      return
+    }
     if (!isSendable(root.active)) {
       note = "Read-only — group id unknown — send from your phone"
       return
     }
     note = "sending…"
+    sendChat = String(root.active.chat)
+    sendText = text
     // "--" so a message that starts with "-" is text, not a flag (argparse honours it).
-    sendProc.command = [
-      root.home + "/bin/imsg-send",
-      "--to", String(root.active.chat),
-      "--yes", "--", text
-    ]
+    var target = root.activeIsGroup
+      ? ["--chat-id", String(root.active.guid)]
+      : ["--to", sendChat]
+    sendProc.command = [root.home + "/bin/imsg-send"].concat(target).concat(["--yes", "--", text])
     sendProc.running = true
   }
 
@@ -157,12 +185,16 @@ Panel {
     id: threadProc
     stdout: StdioCollector {
       onStreamFinished: {
+        var belongsHere = root.inThread && String(root.active.chat) === root.threadRunningChat
+        if (!belongsHere) return
         root.loading = false
         try {
           var d = JSON.parse(text.trim())
           if (d.ok === true) {
             root.bubbles = Array.isArray(d.bubbles) ? d.bubbles : []
             root.pinToBottom = true
+            // A dot means "looked at", so clear it only after content loaded.
+            if (root.hostWidget) root.hostWidget.markThreadRead(root.threadRunningChat)
           } else {
             root.bubbles = []
             root.note = String(d.error || "could not load this thread")
@@ -174,33 +206,45 @@ Panel {
       }
     }
     onExited: function(code, status) {
-      root.loading = false
-      if (code !== 0) root.note = "thread loader failed (exit " + code + ")"
+      var completedChat = root.threadRunningChat
+      var belongsHere = root.inThread && String(root.active.chat) === completedChat
+      root.threadRunningChat = ""
+      if (belongsHere && root.pendingThreadChat === "") root.loading = false
+      if (belongsHere && code !== 0) root.note = "thread loader failed (exit " + code + ")"
+      if (root.pendingThreadChat !== "") Qt.callLater(root.startNextThreadLoad)
     }
   }
 
   Process {
     id: sendProc
     onExited: function(code, status) {
+      var completedChat = root.sendChat
+      var completedText = root.sendText
+      var belongsHere = root.inThread && String(root.active.chat) === completedChat
+      root.sendChat = ""
+      root.sendText = ""
       if (code === 0) {
-        root.note = ""
-        composeField.text = ""
+        if (belongsHere) {
+          root.note = ""
+          // Never erase a newer draft typed after this send began.
+          if (composeField.text === completedText) composeField.text = ""
+        }
         // Give Messages.app a beat to write the row, then reload the thread.
+        root.reloadChat = completedChat
         reloadTimer.restart()
-      } else if (code === 69) {
-        root.note = "not sent — fnix unreachable"
-      } else {
-        root.note = "send failed (exit " + code + ")"
+      } else if (belongsHere) {
+        if (code === 69 || code === 255) root.note = "not sent — fnix unreachable"
+        else root.note = "send failed (exit " + code + ")"
       }
-      composeField.forceActiveFocus()
+      if (belongsHere) composeField.forceActiveFocus()
     }
   }
   Timer {
     id: reloadTimer
     interval: 1500
-    onTriggered: if (root.inThread) {
-      threadProc.command = ["bun", root.threadScript, String(root.active.chat), "80"]
-      threadProc.running = true
+    onTriggered: if (root.inThread && String(root.active.chat) === root.reloadChat) {
+      root.loading = true
+      root.requestThreadLoad(root.reloadChat)
     }
   }
 
@@ -563,7 +607,7 @@ Panel {
           TextField {
             id: composeField
             Layout.fillWidth: true
-            enabled: root.online && root.isSendable(root.active)
+            enabled: root.online && root.isSendable(root.active) && !sendProc.running
             placeholderText: root.isSendable(root.active) ? "iMessage" : "Read-only — group id unknown"
             foreground: root.foreground
             accent: root.mineFill

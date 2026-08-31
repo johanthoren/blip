@@ -216,16 +216,17 @@ describe("dedupeSelfEcho", () => {
 
   test("a text-bearing pair is mine whichever twin arrives first", () => {
     // imsg decodes attributedBody, so the from_me=true twin has text too.
+    const self = msg().chat;
     const a = dedupeSelfEcho([
       msg({ ts: "2026-08-30 21:08:22", from_me: false, text: "same" }),
       msg({ ts: "2026-08-30 21:08:22", from_me: true, text: "same" }),
-    ]);
+    ], [self]);
     expect(a).toHaveLength(1);
     expect(a[0]!.from_me).toBe(true);
     const b = dedupeSelfEcho([
       msg({ ts: "2026-08-30 21:08:22", from_me: true, text: "same" }),
       msg({ ts: "2026-08-30 21:08:22", from_me: false, text: "same" }),
-    ]);
+    ], [self]);
     expect(b[0]!.from_me).toBe(true);
   });
 
@@ -234,12 +235,12 @@ describe("dedupeSelfEcho", () => {
     expect(out[0]!.from_me).toBe(false);
   });
 
-  test("collapses exact duplicates at the same timestamp", () => {
+  test("keeps legitimate same-direction duplicates at the same timestamp", () => {
     const out = dedupeSelfEcho([
       msg({ ts: "2026-08-30 21:08:22", text: "same" }),
       msg({ ts: "2026-08-30 21:08:22", text: "same" }),
     ]);
-    expect(out).toHaveLength(1);
+    expect(out).toHaveLength(2);
   });
 
   test("keeps identical text sent at different times", () => {
@@ -323,6 +324,19 @@ describe("selectThread", () => {
   test("keeps only the newest `limit` messages", () => {
     const raw = Array.from({ length: 5 }, (_, i) => msg({ chat: guid, ts: `2026-08-30 12:0${i}:00`, text: `m${i}` }));
     expect(selectThread(raw, guid, true, 2).map((m) => m.text)).toEqual(["m3", "m4"]);
+  });
+
+  test("a DM drops rows whose handle merely contains the queried digits", () => {
+    // `imsg thread` matches by substring; another handle with the same tail
+    // must not leak into this conversation (Codex finding #3).
+    const out = selectThread(
+      [
+        msg({ chat: "+15551234567", handle: "+15551234567", text: "mine" }),
+        msg({ chat: "+995551234567", handle: "+995551234567", text: "someone else" }),
+      ],
+      "+15551234567", false, 80,
+    );
+    expect(out.map((m) => m.text)).toEqual(["mine"]);
   });
 
   test("a DM window passes through untouched apart from ordering", () => {

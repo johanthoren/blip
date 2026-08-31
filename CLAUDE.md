@@ -28,6 +28,10 @@ what it is handed. Keep it that way.
 - **Two read marks.** `watermark` = what the collector has seen (drives toasts).
   `readMark` / `readMarks[chat]` = what the user has looked at (drives the badge
   and the blue dots). Collapsing them makes the badge flash and reset.
+- **Unread is ledger-backed.** `unreadCounts` and `unreadOldest` persist per-chat
+  metadata without message bodies. Catch-up fetches cover new arrivals and the
+  oldest outstanding unread so deletions are reconciled; never derive the total
+  badge solely from the preview window.
 - **Dedupe the self-thread before counting.** A message you send yourself lands
   twice (`from_me` true and false, same ts+text). `dedupeSelfEcho()` runs before
   `buildThreads()` and before `decorate()`.
@@ -35,7 +39,8 @@ what it is handed. Keep it that way.
   should receive typing must be covered by its `blocked:` binding.
 - **Pass `--` before message text** to both `imsg-send` and `notify-send`.
 - **No message content on disk.** `~/.local/state/blip/state.json` holds
-  timestamps, a toast-dedupe ring, and group metadata. Nothing else.
+  timestamps, counts, opaque SHA-256 toast keys, self-chat ids, and group
+  metadata. It is atomic and `0600`; no message bodies are allowed.
 - **`chat:null` exists.** Use `chatKey()`; never `String(m.chat)`.
 - **Group ids come in two shapes**: 32 hex, or `chat<digits>`. `isGroupChat()` is
   "not a phone/email" — never a positive regex on one shape.

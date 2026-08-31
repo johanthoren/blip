@@ -30,16 +30,16 @@ export const STATE_PATH = `${HOME}/.local/state/blip/state.json`;
 export const ALLOWLIST_PATH = `${HOME}/.config/blip/allowlist.json`;
 
 /**
- * Shallow poll window for previews and toasts. Badge counts come from a
- * separate pending-message query, so unread messages cannot fall out of this
- * window and disappear merely because newer traffic arrived.
+ * Shallow poll window for previews and toasts. An exact metadata-only unread
+ * ledger survives rows leaving this window; catch-up polls expand adaptively
+ * until they cover both new arrivals and the oldest outstanding unread row.
  */
 export const POLL_WINDOW = 150;
 /** Deep window, fetched when the panel opens and needs a real thread list. */
 export const DEEP_WINDOW = 500;
 
 export interface ImsgMessage {
-  /** Stable chat.db message ROWID, supplied by the bundled Mac bridge. */
+  /** Stable chat.db message ROWID, supplied by bridges that expose it. */
   id?: number | string;
   /** Stable Messages GUID when available. */
   guid?: string;
@@ -66,7 +66,7 @@ export interface Thread {
   last_text: string;
   last_from_me: boolean;
   count: number;       // messages for this chat inside the fetched window
-  unread: number;      // inbound newer than the watermark
+  unread: number;      // inbound newer than the global/per-thread read mark
 }
 
 export interface Toast {
@@ -93,6 +93,14 @@ export interface GroupInfo { name: string; guid: string; participants: string[] 
 export interface BlipState {
   watermark: string;
   readMark: string;
+  /** Exact unread ledger, independent of the bounded preview window. */
+  unreadCounts: Record<string, number>;
+  /** Oldest outstanding unread timestamp per chat, used to reconcile deletes. */
+  unreadOldest: Record<string, string>;
+  /** True after the ledger has been seeded from every row after readMark. */
+  unreadInitialized: boolean;
+  /** Chats positively identified as the self-thread from its twin-row shape. */
+  selfChats: string[];
   /** Group chat metadata from chat.db (display_name + members), refreshed on
    *  --deep. Cached so shallow polls can name groups without a second ssh. */
   groups: Record<string, GroupInfo>;
@@ -120,11 +128,31 @@ export function loadState(path = STATE_PATH): BlipState {
   try {
     const s = JSON.parse(readFileSync(path, "utf8")) as Partial<BlipState>;
     const watermark = typeof s.watermark === "string" ? s.watermark : "";
+    const unreadCounts = s.unreadCounts && typeof s.unreadCounts === "object"
+      ? Object.fromEntries(
+        Object.entries(s.unreadCounts).filter(([, n]) => typeof n === "number" && Number.isFinite(n) && n >= 0),
+      )
+      : {};
+    const unreadOldest = s.unreadOldest && typeof s.unreadOldest === "object"
+      ? Object.fromEntries(
+        Object.entries(s.unreadOldest).filter(([, ts]) => typeof ts === "string" && ts !== ""),
+      )
+      : {};
+    // A count-only ledger from an interrupted/experimental build cannot be
+    // reconciled for deletions. Reseed it from readMark on the next poll.
+    const ledgerComplete = Object.entries(unreadCounts)
+      .every(([chat, count]) => count === 0 || unreadOldest[chat]);
     return {
       watermark,
       // Pre-two-mark state files have no readMark. Inheriting the watermark is
       // the safe migration: it reports zero unread rather than a fake backlog.
       readMark: typeof s.readMark === "string" ? s.readMark : watermark,
+      unreadCounts,
+      unreadOldest,
+      unreadInitialized: s.unreadInitialized === true && ledgerComplete,
+      selfChats: Array.isArray(s.selfChats)
+        ? s.selfChats.filter((chat): chat is string => typeof chat === "string")
+        : [],
       readMarks: s.readMarks && typeof s.readMarks === "object" ? { ...s.readMarks } : {},
       groups: s.groups && typeof s.groups === "object" ? { ...s.groups } : {},
       // Older releases stored ts|chat|text verbatim. Hash legacy entries while
@@ -134,7 +162,10 @@ export function loadState(path = STATE_PATH): BlipState {
         : [],
     };
   } catch {
-    return { watermark: "", readMark: "", readMarks: {}, groups: {}, toasted: [] };
+    return {
+      watermark: "", readMark: "", unreadCounts: {}, unreadOldest: {}, unreadInitialized: false,
+      selfChats: [], readMarks: {}, groups: {}, toasted: [],
+    };
   }
 }
 
@@ -190,12 +221,23 @@ export function isGroupChat(chat: string): boolean {
  * counts as unread and re-lights the dot. Collapse the pair and attribute it
  * to me. Shared with thread.ts so the list and the bubbles agree.
  */
-export function dedupeSelfEcho(msgs: ImsgMessage[]): ImsgMessage[] {
+export function detectSelfChats(msgs: ImsgMessage[]): string[] {
+  const contextKey = (m: ImsgMessage) => `${chatKey(m)}\u0000${m.handle || ""}\u0000${m.ts}`;
+  const emptySent = new Set(msgs.filter((m) => m.from_me && m.text === "").map(contextKey));
+  const chats = new Set(msgs.filter((m) => m.self_chat === true).map(chatKey));
+  for (const m of msgs) {
+    if (!m.from_me && emptySent.has(contextKey(m))) chats.add(chatKey(m));
+  }
+  return [...chats].filter(Boolean);
+}
+
+export function dedupeSelfEcho(msgs: ImsgMessage[], knownSelfChats: string[] = []): ImsgMessage[] {
   const contextKey = (m: ImsgMessage) => `${chatKey(m)}\u0000${m.handle || ""}\u0000${m.ts}`;
   const contentKey = (m: ImsgMessage) => `${contextKey(m)}\u0000${m.text}`;
-  const selfContexts = new Set(msgs.filter((m) => m.self_chat === true).map(contextKey));
+  const selfChats = new Set([...knownSelfChats, ...detectSelfChats(msgs)]);
+  const selfContexts = new Set(msgs.filter((m) => selfChats.has(chatKey(m))).map(contextKey));
   const emptySent = new Set(
-    msgs.filter((m) => m.self_chat === true && m.from_me && m.text === "").map(contextKey),
+    msgs.filter((m) => selfChats.has(chatKey(m)) && m.from_me && m.text === "").map(contextKey),
   );
   const selfText = new Map<string, number>();
   const seenIds = new Set<string>();
@@ -209,7 +251,7 @@ export function dedupeSelfEcho(msgs: ImsgMessage[]): ImsgMessage[] {
     const context = contextKey(m);
     // The empty outbound half of a known self echo is transport noise. Keep
     // empty inbound rows: they can represent an attachment and are unread.
-    if (m.self_chat === true && m.from_me && m.text === "") continue;
+    if (selfChats.has(chatKey(m)) && m.from_me && m.text === "") continue;
 
     if (selfContexts.has(context) && m.text !== "") {
       const key = contentKey(m);
@@ -327,7 +369,7 @@ export function toastKey(m: ImsgMessage): string {
  *   1. inbound only, and strictly newer than the watermark
  *   2. sender (chat OR handle) is on the allowlist
  *   3. not already toasted — this is what stops the self-thread echo storm,
- *      where Larry's own sent replies come back as from_me=false
+ *      where the user's own sent replies come back as from_me=false
  */
 export function selectToasts(
   msgs: ImsgMessage[],
@@ -356,6 +398,12 @@ export function maxTs(msgs: ImsgMessage[], fallback: string): string {
   let hi = fallback;
   for (const m of msgs) if (m.ts > hi) hi = m.ts;
   return hi;
+}
+
+export function minTs(msgs: ImsgMessage[], fallback: string): string {
+  let low = fallback;
+  for (const m of msgs) if (!low || m.ts < low) low = m.ts;
+  return low;
 }
 
 // ---------------------------------------------------------------- transport
@@ -394,33 +442,24 @@ export function fetchMessages(limit: number, runner = spawnSync): FetchResult {
 }
 
 /**
- * Fetch every row still newer than its global/per-thread read mark. This is
- * separate from the bounded preview fetch so the badge remains exact even
- * when old unread messages fall outside the latest 150 rows.
+ * Fetch a preview window, expanding only while every returned row is at or
+ * newer than the cutoff. This catches bursts/outages larger than POLL_WINDOW
+ * and covers the unread reconciliation boundary without transferring the full
+ * history during ordinary six-second polls.
  */
-export function fetchPendingMessages(
-  readMark: string,
-  readMarks: Record<string, string>,
+export function fetchMessagesAfter(
+  cutoff: string,
+  minimum: number,
   runner = spawnSync,
 ): FetchResult {
-  if (!readMark) return { ok: true, online: true, error: "", msgs: [] };
-  const res = runner(`${HOME}/bin/imsg`, ["--json", "pending"], {
-    encoding: "utf8",
-    timeout: 15000,
-    input: JSON.stringify({ readMark, readMarks }),
-  });
-
-  if (res.status === 69) return { ok: false, online: false, error: "fnix unreachable", msgs: [] };
-  if (res.status !== 0) {
-    const err = (res.stderr || "").toString().trim().split("\n")[0] || `imsg exit ${res.status}`;
-    return { ok: false, online: true, error: err, msgs: [] };
-  }
-  try {
-    const parsed = JSON.parse(res.stdout as string);
-    if (!Array.isArray(parsed)) throw new Error("not an array");
-    return { ok: true, online: true, error: "", msgs: parsed as ImsgMessage[] };
-  } catch (e) {
-    return { ok: false, online: true, error: `bad JSON from imsg pending: ${e}`, msgs: [] };
+  let limit = minimum;
+  while (true) {
+    const fetched = fetchMessages(limit, runner);
+    if (!fetched.ok || !cutoff || fetched.msgs.length < limit) return fetched;
+    // Fetch beyond the boundary, not merely to it: several rows can share a
+    // one-second timestamp and otherwise straddle the window edge.
+    if (minTs(fetched.msgs, "") < cutoff) return fetched;
+    limit *= 2;
   }
 }
 
@@ -437,6 +476,21 @@ export function unreadCounts(
     if (!m.from_me && m.ts > mark) counts[chat] = (counts[chat] ?? 0) + 1;
   }
   return counts;
+}
+
+export function unreadOldest(
+  msgs: ImsgMessage[],
+  readMark: string,
+  readMarks: Record<string, string>,
+): Record<string, string> {
+  const oldest: Record<string, string> = {};
+  if (!readMark) return oldest;
+  for (const m of msgs) {
+    const chat = chatKey(m);
+    const mark = readMarks[chat] && readMarks[chat]! > readMark ? readMarks[chat]! : readMark;
+    if (!m.from_me && m.ts > mark && (!oldest[chat] || m.ts < oldest[chat]!)) oldest[chat] = m.ts;
+  }
+  return oldest;
 }
 
 /** `imsg --json groups` — claude-on-mac ≥ 1.4.0. */
@@ -468,7 +522,17 @@ export function fetchGroups(runner = spawnSync): Record<string, GroupInfo> | nul
 export function collect(deep: boolean, markRead = false, readChat = ""): BlipOutput {
   const now = new Date().toISOString();
   const state = loadState();
-  const fetched = fetchMessages(deep ? DEEP_WINDOW : POLL_WINDOW);
+  // On migration, seed the ledger all the way back to what the user last read.
+  // Thereafter cover both new arrivals and every outstanding unread row. That
+  // makes the ledger exact even if an unread message is deleted on the Mac.
+  const oldestUnread = Object.values(state.unreadOldest).reduce(
+    (oldest, ts) => !oldest || ts < oldest ? ts : oldest,
+    "",
+  );
+  const cutoff = state.unreadInitialized
+    ? oldestUnread && oldestUnread < state.watermark ? oldestUnread : state.watermark
+    : state.readMark;
+  const fetched = fetchMessagesAfter(cutoff, deep ? DEEP_WINDOW : POLL_WINDOW);
 
   if (!fetched.ok) {
     return {
@@ -493,26 +557,37 @@ export function collect(deep: boolean, markRead = false, readChat = ""): BlipOut
   // Group metadata is ~1000 rows; refresh it only on a deep (panel) fetch and
   // keep the last good copy if the lookup fails.
   const groups = (deep ? fetchGroups() : null) ?? state.groups;
-  const msgs = dedupeSelfEcho(fetched.msgs);
-  const pending = markRead
-    ? { ok: true, online: true, error: "", msgs: [] } satisfies FetchResult
-    : fetchPendingMessages(state.readMark, state.readMarks);
-  const exactCounts = pending.ok
-    ? unreadCounts(dedupeSelfEcho(pending.msgs), readMark, readMarks)
-    : undefined;
+  const selfChats = [...new Set([...state.selfChats, ...detectSelfChats(fetched.msgs)])];
+  const msgs = dedupeSelfEcho(fetched.msgs, selfChats);
+  let exactCounts = unreadCounts(msgs, state.readMark, state.readMarks);
+  let exactOldest = unreadOldest(msgs, state.readMark, state.readMarks);
+  if (markRead) {
+    exactCounts = {};
+    exactOldest = {};
+  } else if (readChat) {
+    delete exactCounts[readChat];
+    delete exactOldest[readChat];
+  }
+  // Prune per-thread marks the global mark has overtaken (Codex finding #13):
+  // they no longer affect any count and would otherwise accumulate forever.
+  for (const [chat, ts] of Object.entries(readMarks)) {
+    if (ts <= readMark) delete readMarks[chat];
+  }
   const threads = buildThreads(msgs, readMark, readMarks, groups, exactCounts);
   const toast = selectToasts(msgs, state.watermark, loadAllowlist(), state.toasted);
-  const unread = exactCounts
-    ? Object.values(exactCounts).reduce((n, count) => n + count, 0)
-    : threads.reduce((n, t) => n + t.unread, 0);
+  const unread = Object.values(exactCounts).reduce((n, count) => n + count, 0);
 
   // Both marks advance only on a good fetch, so an outage cannot silently
   // swallow the messages that arrived during it.
   const persisted = saveState({
     watermark: highest,
     // First ever run: adopt the current high-water rather than reporting the
-    // whole 60-message window as unread the moment the plugin is installed.
+    // whole preview window as unread the moment the plugin is installed.
     readMark: state.readMark === "" ? highest : readMark,
+    unreadCounts: exactCounts,
+    unreadOldest: exactOldest,
+    unreadInitialized: true,
+    selfChats,
     readMarks,
     groups,
     toasted: [...state.toasted, ...toast.map((t) => t.key)],
@@ -520,9 +595,7 @@ export function collect(deep: boolean, markRead = false, readChat = ""): BlipOut
 
   const warning = !persisted
     ? "state write failed; notifications paused"
-    : !pending.ok
-      ? `unread count degraded: ${pending.error}`
-      : "";
+    : "";
   return {
     ok: true,
     online: true,

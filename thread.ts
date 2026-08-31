@@ -11,7 +11,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { chatKey, dedupeSelfEcho, isGroupChat, type ImsgMessage } from "./collector";
+import { chatKey, dedupeSelfEcho, isGroupChat, loadState, type ImsgMessage } from "./collector";
 export { dedupeSelfEcho };
 
 const HOME = process.env.HOME ?? "/home/pi";
@@ -148,10 +148,19 @@ export const GROUP_SCAN_WINDOW = 1500;
  * `recent` is newest-first and mixed across chats; `thread` is already
  * oldest-first and single-chat. Both end up oldest-first, last `limit` only.
  */
-export function selectThread(raw: ImsgMessage[], chat: string, group: boolean, limit: number): ImsgMessage[] {
-  let msgs = group ? raw.filter((m) => chatKey(m) === chat) : raw;
+export function selectThread(
+  raw: ImsgMessage[],
+  chat: string,
+  group: boolean,
+  limit: number,
+  selfChats: string[] = [],
+): ImsgMessage[] {
+  // Exact-filter DMs too: `imsg thread` matches the handle by SUBSTRING, so
+  // +15551234567 can pull rows from +995551234567 into the wrong conversation
+  // (Codex finding #3).
+  let msgs = raw.filter((m) => chatKey(m) === chat || (!group && m.handle === chat));
   msgs = [...msgs].sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
-  msgs = dedupeSelfEcho(msgs);
+  msgs = dedupeSelfEcho(msgs, selfChats);
   return msgs.length > limit ? msgs.slice(msgs.length - limit) : msgs;
 }
 
@@ -184,7 +193,7 @@ export function loadThread(
   try {
     const parsed = JSON.parse(res.stdout as string);
     if (!Array.isArray(parsed)) throw new Error("not an array");
-    const msgs = selectThread(parsed as ImsgMessage[], chat, group, limit);
+    const msgs = selectThread(parsed as ImsgMessage[], chat, group, limit, loadState().selfChats);
     return { ok: true, online: true, error: "", bubbles: decorate(msgs, today) };
   } catch (e) {
     return { ok: false, online: true, error: `bad JSON from imsg: ${e}`, bubbles: [] };

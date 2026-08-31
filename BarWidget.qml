@@ -79,11 +79,31 @@ BarWidget {
   // `deep` widens the fetch window for the panel; `markRead` clears the badge.
   // `readChat` clears one thread's blue dot — iMessage semantics: the dot
   // survives viewing the list and only goes when that conversation is opened.
-  property var queued: null            // a refresh requested while one was running
+  property var refreshQueue: []        // stateful requests are never overwritten
+  property bool collectorReserved: false // a queued run owns the next event-loop turn
 
   function refresh(deep, markRead, readChat) {
     var req = { deep: deep === true, markRead: markRead === true, readChat: String(readChat || "") }
-    if (collector.running) { queued = req; return }   // never drop a read-mark
+    if (collector.running || collectorReserved) { enqueueRefresh(req); return }
+    runRefresh(req)
+  }
+  function enqueueRefresh(req) {
+    var q = refreshQueue.slice()
+    // Timer/manual refreshes carry no state transition, so coalesce them. Read
+    // and mark-all requests remain FIFO entries and can never be overwritten.
+    if (!req.markRead && req.readChat === "") {
+      for (var i = 0; i < q.length; i++) {
+        if (!q[i].markRead && q[i].readChat === "") {
+          q[i] = { deep: q[i].deep || req.deep, markRead: false, readChat: "" }
+          refreshQueue = q
+          return
+        }
+      }
+    }
+    q.push(req)
+    refreshQueue = q
+  }
+  function runRefresh(req) {
     var args = ["bun", collectorPath]
     if (req.deep) args.push("--deep")
     if (req.markRead) args.push("--mark-read")
@@ -109,7 +129,7 @@ BarWidget {
           if (d.ok === true) {
             root.threads = Array.isArray(d.threads) ? d.threads : []
             root.unread = Number(d.unread) || 0
-            root.healthy = true
+            root.healthy = d.persisted !== false
             if (Array.isArray(d.toast)) root.fireToasts(d.toast)
           } else {
             root.healthy = false
@@ -123,7 +143,16 @@ BarWidget {
     }
     onExited: function(code, status) {
       if (code !== 0) root.healthy = false
-      if (root.queued) { var q = root.queued; root.queued = null; Qt.callLater(function() { root.refresh(q.deep, q.markRead, q.readChat) }) }
+      if (root.refreshQueue.length > 0) {
+        var q = root.refreshQueue.slice()
+        var next = q.shift()
+        root.refreshQueue = q
+        root.collectorReserved = true
+        Qt.callLater(function() {
+          root.collectorReserved = false
+          root.runRefresh(next)
+        })
+      }
     }
   }
 
@@ -148,6 +177,9 @@ BarWidget {
     if (!list || list.length === 0) return
     var q = toastQueue.slice()
     for (var i = 0; i < list.length; i++) q.push(list[i])
+    // A hung notify-send must not grow the queue forever (Codex finding #14):
+    // keep the newest 20 and drop the backlog — the badge still counts them.
+    if (q.length > 20) q = q.slice(q.length - 20)
     toastQueue = q
     drainToasts()
   }
