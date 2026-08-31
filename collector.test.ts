@@ -588,6 +588,29 @@ describe("readMarks pruning", () => {
   });
 });
 
+describe("text-bearing self twins", () => {
+  test("a same-chat same-handle same-second text pair marks the self chat", () => {
+    // imsg decodes attributedBody: the outbound twin is rarely empty.
+    const msgs = [
+      msg({ chat: "+15550100001", handle: "+15550100001", ts: "2026-08-30 21:45:00", from_me: true, text: "note" }),
+      msg({ chat: "+15550100001", handle: "+15550100001", ts: "2026-08-30 21:45:00", from_me: false, text: "note" }),
+    ];
+    expect(detectSelfChats(msgs)).toEqual(["+15550100001"]);
+    const out = dedupeSelfEcho(msgs);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.from_me).toBe(true);
+  });
+
+  test("two different senders with the same text in one second stay distinct", () => {
+    const msgs = [
+      msg({ chat: "g", handle: "+15550100004", ts: "2026-08-30 21:45:00", from_me: false, text: "lol" }),
+      msg({ chat: "g", handle: "+15550100005", ts: "2026-08-30 21:45:00", from_me: false, text: "lol" }),
+    ];
+    expect(detectSelfChats(msgs)).toEqual([]);
+    expect(dedupeSelfEcho(msgs)).toHaveLength(2);
+  });
+});
+
 describe("fetchGroups", () => {
   const fake = (r: { status: number; stdout?: string }) =>
     (() => ({ status: r.status, stdout: r.stdout ?? "", stderr: "" })) as never;

@@ -137,6 +137,23 @@ Panel {
     threadProc.running = true
   }
 
+  /** IPC test hook: drive the exact user send path minus the keyboard.
+   *  Keystroke injection (wtype) proved non-deterministic — a virtual
+   *  keyboard's events can land on whatever surface Hyprland favors. */
+  function composeAndSend(text) {
+    if (!inThread) return "not in a thread"
+    composeField.text = String(text || "")
+    send()
+    return note === "" ? "sent-dispatch" : note
+  }
+
+  /** Model truth for the bubble view, for automated verification. */
+  function bubbleModel() {
+    return JSON.stringify(bubbles.map(function(b) {
+      return { mine: b.from_me === true, text: String(b.text || "").substring(0, 30) }
+    }))
+  }
+
   function send() {
     var text = composeField.text
     if (!root.inThread || text.trim() === "") return
@@ -512,70 +529,84 @@ Panel {
                   font.pixelSize: Style.font.caption
                 }
 
-                // the bubble itself. Width comes from the laid-out text
-                // (contentWidth), never the unwrapped implicitWidth — a long
-                // line would otherwise overshoot the cap and break alignment.
-                Rectangle {
-                  id: bubble
-                  readonly property real maxInner: Math.round(content.width * 0.78) - Style.space(22)
-                  Layout.alignment: bubbleRow.mine ? Qt.AlignRight : Qt.AlignLeft
+                // the bubble in an explicit spacer row: a stretchy Item on
+                // the sender's far side guarantees right/left placement even
+                // when the delegate's own width collapses to its content.
+                RowLayout {
+                  Layout.fillWidth: true
                   Layout.topMargin: modelData.groupStart ? Style.space(6) : 0
-                  Layout.preferredWidth: Math.ceil(bubbleText.contentWidth) + Style.space(22)
-                  Layout.preferredHeight: Math.ceil(bubbleText.contentHeight) + Style.space(14)
-                  radius: Style.space(16)
-                  color: bubbleRow.mine ? root.mineFill : root.theirsFill
+                  spacing: 0
 
-                  // iMessage squares off the corner nearest the sender on the
-                  // last bubble of a run — the "tail" without drawing a tail.
+                  Item { Layout.fillWidth: true; visible: bubbleRow.mine }
+
                   Rectangle {
-                    visible: modelData.groupEnd === true
-                    width: Style.space(16); height: Style.space(16)
-                    color: bubble.color
-                    anchors.bottom: parent.bottom
-                    anchors.right: bubbleRow.mine ? parent.right : undefined
-                    anchors.left: bubbleRow.mine ? undefined : parent.left
-                  }                  // TextEdit, not Text: read-only but selectable, so a message
-                  // can be highlighted and Ctrl+C'd like any other text.
-                  TextEdit {
-                    id: bubbleText
-                    x: Style.space(11); y: Style.space(7)
-                    width: bubble.maxInner
-                    text: String(modelData.text || "")
-                    textFormat: TextEdit.PlainText
-                    wrapMode: TextEdit.Wrap
-                    readOnly: true
-                    selectByMouse: true
-                    persistentSelection: false
-                    color: bubbleRow.mine ? root.mineText : root.theirsText
-                    selectionColor: bubbleRow.mine ? "#ffffff" : root.mineFill
-                    selectedTextColor: bubbleRow.mine ? root.mineFill : "#ffffff"
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                    // Focus goes to the bubble while selecting; the key catcher
-                    // is blocked for any focused editor (see below).
-                    onActiveFocusChanged: root.bubbleFocused = activeFocus
-                    Keys.onEscapePressed: { deselect(); composeField.forceActiveFocus() }
+                    id: bubble
+                    readonly property real maxInner: Math.round(content.width * 0.78) - Style.space(22)
+                    Layout.preferredWidth: Math.ceil(bubbleText.contentWidth) + Style.space(22)
+                    Layout.preferredHeight: Math.ceil(bubbleText.contentHeight) + Style.space(14)
+                    radius: Style.space(16)
+                    color: bubbleRow.mine ? root.mineFill : root.theirsFill
+
+                    // iMessage squares off the corner nearest the sender on the
+                    // last bubble of a run — the "tail" without drawing a tail.
+                    Rectangle {
+                      visible: modelData.groupEnd === true
+                      width: Style.space(16); height: Style.space(16)
+                      color: bubble.color
+                      anchors.bottom: parent.bottom
+                      anchors.right: bubbleRow.mine ? parent.right : undefined
+                      anchors.left: bubbleRow.mine ? undefined : parent.left
+                    }
+
+                    // TextEdit, not Text: read-only but selectable, so a message
+                    // can be highlighted and Ctrl+C'd like any other text.
+                    TextEdit {
+                      id: bubbleText
+                      x: Style.space(11); y: Style.space(7)
+                      width: bubble.maxInner
+                      text: String(modelData.text || "")
+                      textFormat: TextEdit.PlainText
+                      wrapMode: TextEdit.Wrap
+                      readOnly: true
+                      selectByMouse: true
+                      persistentSelection: false
+                      color: bubbleRow.mine ? root.mineText : root.theirsText
+                      selectionColor: bubbleRow.mine ? "#ffffff" : root.mineFill
+                      selectedTextColor: bubbleRow.mine ? root.mineFill : "#ffffff"
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                      onActiveFocusChanged: root.bubbleFocused = activeFocus
+                      Keys.onEscapePressed: { deselect(); composeField.forceActiveFocus() }
+                    }
+
+                    // right-click = copy the whole message
+                    TapHandler {
+                      acceptedButtons: Qt.RightButton
+                      onTapped: root.copyText(String(modelData.text || ""))
+                    }
                   }
 
-                  // right-click = copy the whole message
-                  TapHandler {
-                    acceptedButtons: Qt.RightButton
-                    onTapped: root.copyText(String(modelData.text || ""))
-                  }
+                  Item { Layout.fillWidth: true; visible: !bubbleRow.mine }
                 }
 
-                // timestamp under the last bubble of a run
-                Text {
-                  Layout.alignment: bubbleRow.mine ? Qt.AlignRight : Qt.AlignLeft
-                  Layout.rightMargin: bubbleRow.mine ? Style.space(6) : 0
-                  Layout.leftMargin: bubbleRow.mine ? 0 : Style.space(6)
+                // timestamp under the last bubble of a run, same spacer trick
+                RowLayout {
+                  Layout.fillWidth: true
                   visible: String(modelData.time || "") !== ""
-                  text: String(modelData.time || "")
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  bottomPadding: Style.space(4)
+                  spacing: 0
+                  Item { Layout.fillWidth: true; visible: bubbleRow.mine }
+                  Text {
+                    Layout.rightMargin: bubbleRow.mine ? Style.space(6) : 0
+                    Layout.leftMargin: bubbleRow.mine ? 0 : Style.space(6)
+                    text: String(modelData.time || "")
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    bottomPadding: Style.space(4)
+                  }
+                  Item { Layout.fillWidth: true; visible: !bubbleRow.mine }
                 }
+
               }
             }
 
@@ -607,7 +638,10 @@ Panel {
           TextField {
             id: composeField
             Layout.fillWidth: true
-            enabled: root.online && root.isSendable(root.active) && !sendProc.running
+            // Never disable while sending: this field is the panel's exclusive
+            // keyboard-focus holder, and disabling it dismisses the panel the
+            // instant Enter is pressed. send() itself refuses concurrent sends.
+            enabled: root.online && root.isSendable(root.active)
             placeholderText: root.isSendable(root.active) ? "iMessage" : "Read-only — group id unknown"
             foreground: root.foreground
             accent: root.mineFill

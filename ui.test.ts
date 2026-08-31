@@ -15,6 +15,12 @@ describe("QML safety invariants", () => {
     expect(panel).toContain("if (!belongsHere) return");
   });
 
+  test("the compose field is never disabled by an in-flight send", () => {
+    // Disabling the exclusive-keyboard-focus holder dismisses the panel the
+    // instant Enter is pressed — the send works but all feedback vanishes.
+    expect(panel).not.toContain("!sendProc.running");
+  });
+
   test("send completion owns immutable chat and draft context", () => {
     expect(panel).toContain("var completedChat = root.sendChat");
     expect(panel).toContain("if (composeField.text === completedText) composeField.text = \"\"");

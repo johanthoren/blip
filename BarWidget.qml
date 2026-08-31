@@ -221,6 +221,8 @@ BarWidget {
     function close(): void { root.close() }
     function toggle(): void { root.toggle() }
     function goto(chat: string): void { root.show(chat) }
+    function compose(text: string): string { return panelLoader.item ? panelLoader.item.composeAndSend(text) : "no panel" }
+    function bubbles(): string { return panelLoader.item ? panelLoader.item.bubbleModel() : "[]" }
   }
 
   // ------------------------------------------------------------ bar button

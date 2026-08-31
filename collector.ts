@@ -225,8 +225,20 @@ export function detectSelfChats(msgs: ImsgMessage[]): string[] {
   const contextKey = (m: ImsgMessage) => `${chatKey(m)}\u0000${m.handle || ""}\u0000${m.ts}`;
   const emptySent = new Set(msgs.filter((m) => m.from_me && m.text === "").map(contextKey));
   const chats = new Set(msgs.filter((m) => m.self_chat === true).map(chatKey));
+  // imsg decodes attributedBody, so both twins usually CARRY the text: the
+  // empty-outbound shape is the exception, not the rule. An outbound and an
+  // inbound row with the same chat+handle+second+text is equally conclusive —
+  // two group members echoing each other differ by handle and never match.
+  const outboundText = new Set(
+    msgs.filter((m) => m.from_me && m.text !== "").map((m) => `${contextKey(m)}\u0000${m.text}`),
+  );
   for (const m of msgs) {
-    if (!m.from_me && emptySent.has(contextKey(m))) chats.add(chatKey(m));
+    if (m.from_me) {
+      if (m.text === "") continue;
+      continue;
+    }
+    if (emptySent.has(contextKey(m))) chats.add(chatKey(m));
+    else if (m.text !== "" && outboundText.has(`${contextKey(m)}\u0000${m.text}`)) chats.add(chatKey(m));
   }
   return [...chats].filter(Boolean);
 }
