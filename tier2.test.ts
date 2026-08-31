@@ -75,6 +75,45 @@ describe("send-file target resolution", () => {
   });
 });
 
+describe("search shaping", () => {
+  const { snippet, shapeResults } = require("./search") as typeof import("./search");
+
+  test("short text passes through untrimmed", () => {
+    expect(snippet("hello there", "hello")).toBe("hello there");
+  });
+
+  test("long text centers the snippet on the match", () => {
+    const long = "x".repeat(200) + " birthday cake " + "y".repeat(200);
+    const s = snippet(long, "birthday");
+    expect(s).toContain("birthday");
+    expect(s.length).toBeLessThanOrEqual(100);
+    expect(s.startsWith("…")).toBe(true);
+  });
+
+  test("attachment-only rows (placeholder char) are dropped", () => {
+    const rows = [
+      { ts: "2026-08-31 10:00:00", from_me: false, handle: "+15551234567", name: "A",
+        service: "iMessage", chat: "+15551234567", text: "￼" },
+      { ts: "2026-08-31 10:01:00", from_me: true, handle: "+15551234567", name: "A",
+        service: "iMessage", chat: "+15551234567", text: "real match" },
+    ] as never[];
+    const out = shapeResults(rows, "match", 10);
+    expect(out.length).toBe(1);
+    expect(out[0]!.text).toBe("real match");
+    expect(out[0]!.from_me).toBe(true);
+  });
+
+  test("group hits are flagged and limit respected", () => {
+    const rows = Array.from({ length: 5 }, (_, i) => ({
+      ts: `2026-08-31 10:0${i}:00`, from_me: false, handle: "+15551234567", name: "G",
+      service: "iMessage", chat: "abcdef0123456789abcdef0123456789", text: `hit ${i}`,
+    })) as never[];
+    const out = shapeResults(rows, "hit", 3);
+    expect(out.length).toBe(3);
+    expect(out[0]!.group).toBe(true);
+  });
+});
+
 describe("paste type picking", () => {
   test("png preferred over other image types", () => {
     expect(pickImageType(["text/plain", "image/jpeg", "image/png"])).toBe("image/png");

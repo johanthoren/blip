@@ -160,6 +160,7 @@ is in your bar.
 | list | `Enter` · `1`–`9` | open thread |
 | list | `r` | refresh |
 | list | `a` · *mark all read* link | clear every badge and dot (local only — iMessage itself is not told) |
+| list | `/` | search every message ever — Enter runs it, click a hit to open its conversation, Esc backs out |
 | thread | `Enter` | send (text, or the queued file with the text as caption) |
 | thread | `Ctrl+V` | paste — an image on the clipboard becomes a queued file, text pastes normally |
 | thread | `/attach <path>` + `Enter` | queue any file on this machine; drag-and-drop works too |

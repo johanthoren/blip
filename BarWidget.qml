@@ -223,6 +223,7 @@ BarWidget {
     function goto(chat: string): void { root.show(chat) }
     function compose(text: string): string { return panelLoader.item ? panelLoader.item.composeAndSend(text) : "no panel" }
     function bubbles(): string { return panelLoader.item ? panelLoader.item.bubbleModel() : "[]" }
+    function find(query: string): string { return panelLoader.item ? panelLoader.item.searchFor(query) : "no panel" }
   }
 
   // ------------------------------------------------------------ bar button
@@ -293,5 +294,7 @@ BarWidget {
 
   // Fixed cyan rather than the theme accent: several Omarchy themes use red for
   // accents, and red must stay reserved for genuine alerts (see larry.status).
-  readonly property color blipAccent: "#5fd7ff"
+  // Follows the Omarchy theme accent (falls back to cyan if the theme has none).
+  readonly property color blipAccent:
+    Color.accent.toString() !== Color.foreground.toString() ? Color.accent : "#5fd7ff"
 }

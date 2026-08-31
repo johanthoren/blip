@@ -28,13 +28,23 @@ Panel {
   readonly property color dim: Qt.darker(foreground, 1.45)
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
-  readonly property color cyan: "#5fd7ff"
-  readonly property color okColor: "#7fbf7f"
+  // Palette follows the Omarchy theme (Fred, 2026-08-31). Color.* is the
+  // live theme singleton — it hot-reloads on theme switch, so every accent,
+  // bubble, and link repaints with the rest of the desktop. If the theme
+  // ships no distinct accent (accent == foreground), fall back to iMessage
+  // blue so "my" bubbles stay readable as mine.
+  readonly property bool themeHasAccent: Color.accent.toString() !== Color.foreground.toString()
+  readonly property color accent: themeHasAccent ? Color.accent : "#0a84ff"
+  readonly property color cyan: accent            // legacy name; accents/links
+  readonly property color okColor: accent
 
-  // iMessage's own palette. Fixed on purpose — the bubbles are the whole
-  // point of looking like iMessage, so they do not follow the Omarchy theme.
-  readonly property color mineFill: "#0a84ff"
-  readonly property color mineText: "#ffffff"
+  readonly property color mineFill: accent
+  // Bubble text picks black/white by which CONTRASTS better with the fill:
+  // (L+0.05)/0.15 vs 1.05/(L+0.05) cross over near L≈0.35. A 0.6 threshold
+  // chose white on medium accents where dark text is clearly more legible
+  // (e.g. Evergreen #4a9a68: white 3.4:1 vs dark 5.1:1).
+  readonly property color mineText:
+    (0.299 * mineFill.r + 0.587 * mineFill.g + 0.114 * mineFill.b) > 0.35 ? "#1a1a1a" : "#ffffff"
   readonly property color theirsFill: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.14)
   readonly property color theirsText: foreground
 
@@ -47,6 +57,17 @@ Panel {
     decodeURIComponent(Qt.resolvedUrl("paste.ts").toString().replace(/^file:\/\//, ""))
   readonly property string sendFileScript:
     decodeURIComponent(Qt.resolvedUrl("send-file.ts").toString().replace(/^file:\/\//, ""))
+  readonly property string searchScript:
+    decodeURIComponent(Qt.resolvedUrl("search.ts").toString().replace(/^file:\/\//, ""))
+
+  // ---- search state (list view only; `/` opens, Esc closes)
+  property bool searching: false
+  property var searchResults: []
+  property string searchNote: ""
+  // Results replace the thread list only once a search has actually produced
+  // something to show — focusing the box alone must not blank the list.
+  readonly property bool searchShowing:
+    searching && (searchResults.length > 0 || searchNote !== "")
 
   // Fetched attachments: id → file:// url; "" = fetch failed (chip shows ⚠).
   // The cache under ~/.cache/blip/att is global, so results never go stale on
@@ -107,6 +128,10 @@ Panel {
     loading = false
     pendingThreadChat = ""
     composeField.text = ""
+    searching = false
+    searchResults = []
+    searchNote = ""
+    searchField.text = ""
     // Deep fetch for a real thread list. Does NOT clear dots: like iMessage,
     // a thread stays marked until that conversation is opened.
     if (hostWidget) hostWidget.refresh(true, false)
@@ -263,6 +288,63 @@ Panel {
     pasteChat = String(active.chat)
     pasteProc.command = ["bun", root.pasteScript]
     pasteProc.running = true
+  }
+
+  // ------------------------------------------------------------- search
+
+  function startSearch() {
+    if (inThread) return
+    searching = true
+    searchResults = []
+    searchNote = ""
+    Qt.callLater(function() { searchField.forceActiveFocus(); searchField.selectAll() })
+  }
+
+  function exitSearch() {
+    searching = false
+    searchResults = []
+    searchNote = ""
+    searchField.text = ""
+    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
+
+  // Monotonic id so a stale completion can never label itself with a newer
+  // query; a query typed while one runs is queued (latest wins) and fires
+  // when the runner frees up — same pattern as thread loads.
+  property int searchSeq: 0
+  property string searchPending: ""
+  function runSearch() {
+    var q = searchField.text.trim()
+    if (q === "") return
+    if (searchProc.running) { searchPending = q; return }
+    searchSeq++
+    searchNote = "searching…"
+    searchResults = []
+    searchProc.command = ["bun", root.searchScript, q, "40"]
+    searchProc.running = true
+  }
+
+  /** IPC hook (`find <query>`): drive the exact search path minus the keyboard. */
+  function searchFor(query) {
+    if (!opened) open()          // a hidden search would be reset by the next open()
+    if (inThread) back()
+    startSearch()
+    searchField.text = String(query || "")
+    runSearch()
+    return "searching: " + searchField.text
+  }
+
+  /** Open the conversation a search hit belongs to. Prefer the live thread
+   *  object (sendable, has the group guid); an old conversation outside the
+   *  poll window opens read-mostly from the hit's identity. */
+  function openSearchHit(hit) {
+    searching = false
+    for (var i = 0; i < threads.length; i++) {
+      if (String(threads[i].chat) === String(hit.chat)) { openThread(threads[i]); return }
+    }
+    openThread({ chat: hit.chat, guid: "", name: hit.name, handle: hit.handle,
+                 service: hit.service, last_ts: hit.ts, last_text: "",
+                 last_from_me: false, count: 0, unread: 0 })
   }
 
   function composeAndSend(text) {
@@ -488,6 +570,34 @@ Panel {
 
   Process { id: openProc }
 
+  Process {
+    id: searchProc
+    property int seq: 0
+    onStarted: seq = root.searchSeq
+    stdout: StdioCollector {
+      onStreamFinished: {
+        if (!root.searching || searchProc.seq !== root.searchSeq) return // Esc'd or superseded
+        try {
+          var d = JSON.parse(text.trim())
+          if (d.ok === true) {
+            root.searchResults = Array.isArray(d.results) ? d.results : []
+            root.searchNote = root.searchResults.length === 0 ? "no matches" : ""
+          } else {
+            root.searchNote = String(d.error || "search failed")
+          }
+        } catch (e) {
+          root.searchNote = "search failed"
+        }
+      }
+    }
+    // A query queued mid-run fires now; runSearch reads the LIVE field, so
+    // anything typed since supersedes the queued text automatically.
+    onExited: if (root.searchPending !== "") {
+      root.searchPending = ""
+      if (root.searching) Qt.callLater(root.runSearch)
+    }
+  }
+
   Timer {
     id: reloadTimer
     interval: 1500
@@ -515,8 +625,8 @@ Panel {
       // Without this it swallows every letter typed into the compose box.
       // Any focused editor — the compose box or a bubble being selected —
       // must receive its own keys (Ctrl+C, arrows, Esc).
-      blocked: composeField.activeFocus || root.bubbleFocused
-      onCloseRequested: root.inThread ? root.back() : root.close()
+      blocked: composeField.activeFocus || searchField.activeFocus || root.bubbleFocused
+      onCloseRequested: root.inThread ? root.back() : (root.searching ? root.exitSearch() : root.close())
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onMoveRequested: function(dx, dy) {
         if (root.inThread || root.threads.length === 0 || dy === 0) return
@@ -526,7 +636,9 @@ Panel {
       onReturnRequested:   if (!root.inThread && root.cursor >= 0) root.openThread(root.threads[root.cursor])
       onTextKey: function(text) {
         if (root.inThread) return
-        if (text === "r" || text === "R") { if (root.hostWidget) root.hostWidget.refresh(true, false) }
+        if (text === "/") root.startSearch()
+        else if (root.searching) return
+        else if (text === "r" || text === "R") { if (root.hostWidget) root.hostWidget.refresh(true, false) }
         else if (text === "a" || text === "A") root.markAllRead()
         else if (text >= "1" && text <= "9") {
           var i = Number(text) - 1
@@ -572,39 +684,29 @@ Panel {
           // Layout height lands a frame or two after `bubbles` changes; a
           // one-shot callLater under-scrolled. Follow the height instead.
           onContentHeightChanged: if (root.pinToBottom && root.inThread) {
-            glide.stop()
+
             contentY = Math.max(0, contentHeight - height)
             if (!root.loading) root.pinToBottom = false
           }
 
-          // Smooth wheel scrolling — constant-velocity chase. Each wheel
-          // event moves an accumulated TARGET; a SmoothedAnimation glides
-          // contentY toward it at fixed px/s. Retargeting a SmoothedAnimation
-          // preserves velocity, so a hi-res wheel (MX Master) firing dozens
-          // of small events reads as ONE continuous sweep. (A restarted
-          // easing animation here dies by a thousand restarts — each event
-          // reset the curve and motion shrank the longer you spun.)
-          property real wheelTarget: 0
+          // Wheel scrolling is DIRECT, 1:1 — no animation. Two animated
+          // schemes (restarted easing, SmoothedAnimation chase) both fought
+          // the MX Master's hi-res event flood and felt broken; hi-res
+          // wheels are smooth by HARDWARE, so applying each delta
+          // immediately is what a browser does and what reads as smooth.
+          // The handler owns the event outright so the Flickable's own
+          // wheel path can never double-apply it.
           WheelHandler {
             target: null
-            acceptedDevices: PointerDevice.Mouse
             onWheel: (ev) => {
-              if (ev.pixelDelta.y !== 0) { ev.accepted = false; return } // touchpad: native
+              // Fred-tuned stride (2026-08-31): 1.25× read as "very small
+              // increments" on the MX Master hi-res wheel.
+              var d = ev.pixelDelta.y !== 0 ? ev.pixelDelta.y * 2.0 : ev.angleDelta.y * 3.0
               var max = Math.max(0, flick.contentHeight - flick.height)
-              var base = glide.running ? flick.wheelTarget : flick.contentY
-              flick.wheelTarget = Math.max(0, Math.min(max, base - (ev.angleDelta.y / 120) * 170))
-              glide.to = flick.wheelTarget
-              glide.restart()
+              flick.contentY = Math.max(0, Math.min(max, flick.contentY - d))
+              ev.accepted = true
             }
           }
-          SmoothedAnimation {
-            id: glide
-            target: flick
-            property: "contentY"
-            velocity: 3200
-          }
-          // A finger on the content beats the glide.
-          onDragStarted: glide.stop()
 
           ColumnLayout {
             id: content
@@ -631,7 +733,7 @@ Panel {
               visible: root.online && !root.inThread
               PanelSectionHeader {
                 Layout.fillWidth: true
-                text: "MESSAGES"
+                text: root.searchShowing ? "SEARCH" : "MESSAGES"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
               }
@@ -640,7 +742,7 @@ Panel {
               // AppleScript cannot flip is_read (see "not possible" in CLAUDE.md).
               Text {
                 id: markAllBtn
-                visible: root.unread > 0
+                visible: root.unread > 0 && !root.searchShowing
                 text: "mark all read"
                 textFormat: Text.PlainText
                 color: markAllMouse.containsMouse ? root.mineFill : root.cyan
@@ -657,7 +759,9 @@ Panel {
                 }
               }
               Text {
-                text: root.threads.length === 0 ? "" : (root.unread > 0 ? "· " : "") + "click, 1–9, or j/k+Enter"
+                text: root.searchShowing
+                  ? "Esc = back"
+                  : root.threads.length === 0 ? "" : (root.unread > 0 ? "· " : "") + "click, 1–9, / search"
                 textFormat: Text.PlainText
                 color: root.dim
                 font.family: root.fontFamily
@@ -665,9 +769,94 @@ Panel {
               }
             }
 
+            // ------------------------------------------------ SEARCH
+            // The box is ALWAYS visible in list view — a hidden search
+            // behind a key nobody presses is a search that does not exist
+            // (Fred: "I don't see search"). Click it or press `/`.
+            TextField {
+              id: searchField
+              Layout.fillWidth: true
+              visible: root.online && !root.inThread
+              placeholderText: "🔍 search all messages"
+              foreground: root.foreground
+              accent: root.accent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              onAccepted: root.runSearch()
+              onActiveFocusChanged: if (activeFocus && !root.searching) root.searching = true
+              Keys.onEscapePressed: root.exitSearch()
+            }
+
             Text {
               Layout.fillWidth: true
-              visible: root.online && !root.inThread && root.threads.length === 0
+              visible: root.searching && root.searchNote !== ""
+              text: root.searchNote
+              textFormat: Text.PlainText
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Repeater {
+              model: root.online && !root.inThread && root.searchShowing ? root.searchResults : []
+              delegate: Rectangle {
+                required property var modelData
+                Layout.fillWidth: true
+                implicitHeight: hitCol.implicitHeight + Style.space(12)
+                radius: Style.cornerRadius
+                color: hitHover.hovered
+                  ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
+                  : "transparent"
+                HoverHandler { id: hitHover }
+                TapHandler { onTapped: root.openSearchHit(modelData) }
+
+                ColumnLayout {
+                  id: hitCol
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.leftMargin: Style.space(8)
+                  anchors.rightMargin: Style.space(8)
+                  spacing: Style.space(2)
+                  RowLayout {
+                    Layout.fillWidth: true
+                    Text {
+                      Layout.fillWidth: true
+                      text: String(modelData.name || modelData.chat)
+                            + (modelData.group ? "  ·  group" : "")
+                      textFormat: Text.PlainText
+                      elide: Text.ElideRight
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                      font.bold: true
+                    }
+                    Text {
+                      text: String(modelData.ts || "").slice(0, 16)
+                      textFormat: Text.PlainText
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+                  Text {
+                    Layout.fillWidth: true
+                    text: (modelData.from_me ? "you: " : "") + String(modelData.text || "")
+                    textFormat: Text.PlainText
+                    elide: Text.ElideRight
+                    maximumLineCount: 2
+                    wrapMode: Text.WordWrap
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+              }
+            }
+
+            Text {
+              Layout.fillWidth: true
+              visible: root.online && !root.inThread && !root.searchShowing && root.threads.length === 0
               text: "No threads in the current window yet — press r to refresh."
               textFormat: Text.PlainText
               color: root.dim
@@ -677,7 +866,7 @@ Panel {
             }
 
             Repeater {
-              model: root.online && !root.inThread ? root.threads : []
+              model: root.online && !root.inThread && !root.searchShowing ? root.threads : []
               delegate: Rectangle {
                 required property var modelData
                 required property int index

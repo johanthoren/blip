@@ -43,7 +43,15 @@ changes to the Mac beyond claude-on-mac updates.
 
 ## Tier 3 — UX parity
 
-- [ ] **Search** — panel UI (`/` key) over `imsg search`.
+- [x] **Search** — shipped 1.0.0: `/` in list view, snippet centered on the
+  match, click opens the thread (live thread object preferred, so groups stay
+  sendable); IPC `find <query>`. Theme colors landed with it: accents and
+  "my" bubbles follow `Color.accent` (luminance-picked text, iMessage-blue
+  fallback for accentless themes). Wheel scroll became DIRECT 1:1 after two
+  animated schemes failed against hi-res wheel event floods.
+- [ ] **Historical group hits** — a search hit in a group older than the
+  1,500-message scan window opens an empty thread (Codex finding, 1.0.0).
+  Needs `imsg thread --chat <id>` on the Mac side to load groups by chat id.
 - [ ] **New-conversation composer** — contact picker from the AddressBook map.
 - [ ] **Reply from the toast** — `notify-send` action buttons → inline reply.
 - [ ] **Real-time push** — launchd watcher on chat.db pinging over the SSH mux
