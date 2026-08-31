@@ -40,8 +40,9 @@ export const DEEP_WINDOW = 500;
 
 /** One reaction folded onto its target message (imsg --rich). */
 export interface Tapback { emoji: string; from_me: boolean; by: string | null }
-/** Attachment metadata only — the file itself stays on the Mac. */
-export interface AttachmentMeta { name: string; mime: string | null; bytes: number | null }
+/** Attachment metadata only — the file itself stays on the Mac until
+ *  fetch.ts pulls it by `id` (attachment ROWID as a string: 64-bit safe). */
+export interface AttachmentMeta { id?: string; name: string; mime: string | null; bytes: number | null }
 
 export interface ImsgMessage {
   /** Stable chat.db message ROWID, supplied by bridges that expose it. */

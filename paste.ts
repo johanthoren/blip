@@ -1,0 +1,79 @@
+#!/usr/bin/env bun
+/**
+ * Blip clipboard paste helper — snapshots the Wayland clipboard ONCE and
+ * reports what it held: an image (staged as a draft file) or text.
+ *
+ *   bun paste.ts   →  {kind:"image", path, url} | {kind:"text", text} | {kind:"none"}
+ *
+ * QML intercepts Ctrl+V and calls this instead of letting TextEdit paste,
+ * because the decision (attach vs insert) needs the mime types, and probing
+ * then re-reading the clipboard is a race — so one process does both.
+ * Drafts land in $XDG_RUNTIME_DIR/blip (tmpfs, 0700, dies with the session);
+ * anything older than an hour is swept on each call.
+ */
+
+import { spawnSync } from "node:child_process";
+import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const RUNTIME = process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 1000}`;
+export const DRAFT_DIR = join(RUNTIME, "blip");
+const DRAFT_GC_MS = 3600_000;
+
+/** Preferred image mime from an offered-types list; "" when no image. */
+export function pickImageType(types: string[]): string {
+  if (types.includes("image/png")) return "image/png";
+  return types.find((t) => t.startsWith("image/")) ?? "";
+}
+
+export function extFor(mime: string): string {
+  return { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" }[mime] ?? "img";
+}
+
+function gcDrafts(): void {
+  const now = Date.now();
+  try {
+    for (const f of readdirSync(DRAFT_DIR)) {
+      const p = join(DRAFT_DIR, f);
+      try {
+        if (now - statSync(p).mtimeMs > DRAFT_GC_MS) unlinkSync(p);
+      } catch { /* ignore */ }
+    }
+  } catch { /* no dir yet */ }
+}
+
+export function snapshotClipboard(runner = spawnSync): Record<string, string> {
+  const types = runner("wl-paste", ["--list-types"], { encoding: "utf8", timeout: 4000 });
+  if (types.status !== 0) return { kind: "none" };
+  const offered = (types.stdout as string).trim().split("\n").filter(Boolean);
+
+  const imageMime = pickImageType(offered);
+  if (imageMime !== "") {
+    const dump = runner("wl-paste", ["-t", imageMime], { timeout: 10000, maxBuffer: 110 * 1024 * 1024 });
+    const bytes = dump.stdout as Buffer;
+    if (dump.status !== 0 || !bytes || bytes.length === 0) {
+      // The clipboard changed between the type probe and the read (the two
+      // are separate wl-paste calls — an inherent, tiny race). Fall through
+      // to the text read rather than swallowing the paste.
+    } else {
+    mkdirSync(DRAFT_DIR, { recursive: true, mode: 0o700 });
+    gcDrafts();
+    const path = join(DRAFT_DIR, `draft-${Date.now()}-${process.pid}.${extFor(imageMime)}`);
+    writeFileSync(path, bytes, { mode: 0o600 });
+    return { kind: "image", path, url: pathToFileURL(path).href };
+    }
+  }
+
+  const text = runner("wl-paste", ["--no-newline", "-t", "text"], { encoding: "utf8", timeout: 4000 });
+  if (text.status === 0 && (text.stdout as string) !== "") return { kind: "text", text: text.stdout as string };
+  return { kind: "none" };
+}
+
+if (import.meta.main) {
+  try {
+    console.log(JSON.stringify(snapshotClipboard()));
+  } catch (e) {
+    console.log(JSON.stringify({ kind: "none", error: String(e) }));
+  }
+}

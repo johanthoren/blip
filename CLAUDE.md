@@ -13,6 +13,10 @@ treating a Mac as the gateway. Read this before touching anything.
                                     equivalent that execs the Mac tool over ssh. Blip only calls ~/bin/imsg*.
 collector.ts                        poll → {threads, unread, toast}. Pure functions + one spawn.
 thread.ts                           one conversation → decorated bubbles. Pure + one spawn.
+fetch.ts                            attachment id → ~/.cache/blip/att (0700/0600, 500MB LRU).
+send-file.ts                        local file + caption → imsg-send --file-stdin. Resolves
+                                    group guid from state; REFUSES unknown groups.
+paste.ts                            clipboard snapshot → draft image in $XDG_RUNTIME_DIR/blip or text.
 BarWidget.qml                       the single poller, badge, toasts, IPC.
 Panel.qml                           list view + conversation view + compose. Renders only.
 manifest.json                       plugin id nixfred.blip
@@ -39,9 +43,15 @@ what it is handed. Keep it that way.
 - **`PanelKeyCatcher` eats keys before focused children.** Any editor that
   should receive typing must be covered by its `blocked:` binding.
 - **Pass `--` before message text** to both `imsg-send` and `notify-send`.
-- **No message content on disk.** `~/.local/state/blip/state.json` holds
+- **No message content in state.json.** `~/.local/state/blip/state.json` holds
   timestamps, counts, opaque SHA-256 toast keys, self-chat ids, and group
-  metadata. It is atomic and `0600`; no message bodies are allowed.
+  metadata. It is atomic and `0600`; no message bodies are allowed. EXCEPTION
+  (Fred, 2026-08-31): fetched MEDIA caches as plain files in
+  `~/.cache/blip/att` (0700/0600, 500 MB LRU) — vic's disk is LUKS-encrypted
+  at rest. Message text still never lands on disk.
+- **The vic shims' ssh preflight must use `ssh -n`.** A bare
+  `ssh fnix true` connectivity probe EATS STDIN, which silently empties
+  `imsg-send --file-stdin` payloads. Fixed 2026-08-31 in ~/.claude/bin shims.
 - **`chat:null` exists.** Use `chatKey()`; never `String(m.chat)`.
 - **Group ids come in two shapes**: 32 hex, or `chat<digits>`. `isGroupChat()` is
   "not a phone/email" — never a positive regex on one shape.

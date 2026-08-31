@@ -23,18 +23,23 @@ changes to the Mac beyond claude-on-mac updates.
 - [x] **Send-effect labels** — shipped 0.8.0: "· sent with confetti" in the
   time row.
 
-## Tier 2 — attachments both directions (mechanisms proven 2026-08-31)
+## Tier 2 — attachments both directions (SHIPPED 0.9.0, 2026-08-31)
 
-- [ ] **Inbound click-to-fetch** — scp over the existing mux; inline image view,
-  `xdg-open` for PDF/video; HEIC→JPEG via `sips` on the Mac. OPEN DECISION:
-  cache policy (`~/.cache/blip` size-capped vs tmpfs) — the no-content-on-disk
-  invariant applies to state.json; fetched media needs its own rule.
-- [ ] **Outbound files** — the Pictures-folder trick: scp → stage in
-  `~/Pictures/` → AppleScript `send POSIX file` → cleanup. Verified delivered
-  (PNG + PDF) 2026-08-31; from any other folder Messages fails with error 25.
-  Lands as `imsg-send --file` in claude-on-mac; Blip compose gets attach +
-  paste-image-from-clipboard.
-- [ ] **Audio messages (inbound)** — fetch + `mpv` playback.
+- [x] **Inbound fetch + inline images** — `imsg attachment <id>` streams bytes
+  over the existing shim (binary-clean; the vic shims' ssh preflight needed
+  `-n` or it ate stdin); HEIC→JPEG via `sips --jpeg`. Images ≤5 MB in the open
+  conversation auto-fetch and render inline; everything else is click-to-fetch
+  → `xdg-open`. Cache: `~/.cache/blip/att`, 0700/0600, 500 MB LRU by mtime
+  (Fred's call: plain files — vic's disk is LUKS-encrypted at rest).
+- [x] **Outbound files** — `imsg-send --file-stdin --name X`: file crosses on
+  STDIN (never a Mac path — no exfil surface), staged in
+  `~/Pictures/.blip-outbox` (subfolder verified OK for the Sequoia quirk),
+  deleted post-send (Messages copies into its own store first) + 1 h GC.
+  Compose: Ctrl+V image paste (paste.ts snapshots the clipboard ONCE),
+  `/attach <path>`, drag-and-drop; draft chip with ✕; caption rides along,
+  reported per-part. Verified delivered from vic end-to-end.
+- [ ] **Audio messages (inbound)** — fetch path exists; needs a play affordance
+  (chips already fetch + xdg-open, so this is polish).
 
 ## Tier 3 — UX parity
 

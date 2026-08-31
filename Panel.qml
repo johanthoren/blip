@@ -41,6 +41,26 @@ Panel {
   readonly property string home: Quickshell.env("HOME")
   readonly property string threadScript:
     decodeURIComponent(Qt.resolvedUrl("thread.ts").toString().replace(/^file:\/\//, ""))
+  readonly property string fetchScript:
+    decodeURIComponent(Qt.resolvedUrl("fetch.ts").toString().replace(/^file:\/\//, ""))
+  readonly property string pasteScript:
+    decodeURIComponent(Qt.resolvedUrl("paste.ts").toString().replace(/^file:\/\//, ""))
+  readonly property string sendFileScript:
+    decodeURIComponent(Qt.resolvedUrl("send-file.ts").toString().replace(/^file:\/\//, ""))
+
+  // Fetched attachments: id → file:// url; "" = fetch failed (chip shows ⚠).
+  // The cache under ~/.cache/blip/att is global, so results never go stale on
+  // a thread switch — no ownership tracking needed, unlike thread loads.
+  property var attFiles: ({})
+  property var fetchQueue: []
+  property string fetchingId: ""
+  // Compose draft attachment (one per message in v1).
+  property string draftPath: ""
+  property string draftLabel: ""
+  // What the in-flight file send / paste belong to, so late completions
+  // can't clobber a NEWER draft or land in a DIFFERENT conversation.
+  property string sendDraftPath: ""
+  property string pasteChat: ""
 
   readonly property var threads: hostWidget ? hostWidget.threads : []
   readonly property bool online: hostWidget ? hostWidget.online : false
@@ -109,6 +129,7 @@ Panel {
     loading = false
     pendingThreadChat = ""
     composeField.text = ""
+    clearDraft()   // a queued file must never survive into another thread
     pinToBottom = false
     Qt.callLater(function() { flick.contentY = 0; keyCatcher.forceActiveFocus() })
   }
@@ -120,6 +141,7 @@ Panel {
     note = ""
     loading = true
     composeField.text = ""
+    clearDraft()   // a queued file must never survive into another thread
     requestThreadLoad(String(t.chat))
     Qt.callLater(function() { composeField.forceActiveFocus() })
   }
@@ -163,6 +185,86 @@ Panel {
     return s
   }
 
+  // ---------------------------------------------------- attachment fetching
+
+  function isImageMime(m) { return String(m || "").indexOf("image/") === 0 }
+
+  function enqueueFetch(att, openWhenDone) {
+    var id = String(att.id || "")
+    if (id === "" || fetchingId === id) return
+    if (attFiles[id] !== undefined && !openWhenDone) return
+    for (var i = 0; i < fetchQueue.length; i++) {
+      if (fetchQueue[i].id === id) {
+        if (openWhenDone) fetchQueue[i].open = true
+        return
+      }
+    }
+    fetchQueue.push({ id: id, name: String(att.name || "file"),
+                      mime: String(att.mime || ""), open: openWhenDone === true })
+    pumpFetch()
+  }
+
+  property bool fetchJobOpen: false
+  function pumpFetch() {
+    if (fetchProc.running || fetchQueue.length === 0) return
+    var job = fetchQueue.shift()
+    fetchingId = job.id
+    fetchJobOpen = job.open === true
+    fetchProc.command = ["bun", root.fetchScript, job.id, job.name, job.mime]
+    fetchProc.running = true
+  }
+
+  /** Images ≤ 5 MB in the open conversation fetch themselves (Fred's call —
+   *  it's what makes the panel feel like Messages, and cached hits are free). */
+  function autoFetchImages() {
+    if (!inThread) return
+    for (var i = 0; i < bubbles.length; i++) {
+      var atts = bubbles[i].attachments || []
+      for (var j = 0; j < atts.length; j++) {
+        // bytes must be KNOWN and small — null/0 must not slip under the cap
+        // and auto-pull something the click-path 100 MB ceiling would allow.
+        var b = atts[j].bytes
+        if (isImageMime(atts[j].mime) && typeof b === "number" && b > 0 && b <= 5 * 1024 * 1024)
+          enqueueFetch(atts[j])
+      }
+    }
+  }
+
+  /** Chip/image click: fetch-then-open. ALWAYS round-trips fetch.ts, even
+   *  when attFiles already has a url — the LRU may have evicted the file
+   *  since (Codex finding #5); a cache hit is instant anyway. */
+  function openAttachment(att) {
+    var id = String(att.id || "")
+    if (id === "") return
+    if (attFiles[id] === "") {   // failed marker — clear it so a retry runs
+      var m = Object.assign({}, attFiles); delete m[id]; attFiles = m
+    }
+    enqueueFetch(att, true)
+  }
+
+  // ------------------------------------------------------ compose attachment
+
+  function setDraft(path) {
+    var p = String(path || "")
+    if (p === "") return
+    draftPath = p
+    var parts = p.split("/")
+    draftLabel = parts[parts.length - 1] || "file"
+    Qt.callLater(function() { composeField.forceActiveFocus() })
+  }
+
+  function clearDraft() {
+    draftPath = ""
+    draftLabel = ""
+  }
+
+  function startPaste() {
+    if (pasteProc.running || !inThread) return
+    pasteChat = String(active.chat)
+    pasteProc.command = ["bun", root.pasteScript]
+    pasteProc.running = true
+  }
+
   function composeAndSend(text) {
     if (!inThread) return "not in a thread"
     composeField.text = String(text || "")
@@ -179,8 +281,21 @@ Panel {
 
   function send() {
     var text = composeField.text
-    if (!root.inThread || text.trim() === "") return
-    if (sendProc.running) {
+    if (!root.inThread) return
+
+    // "/attach <path>" queues a file from anywhere on vic as the draft.
+    var trimmed = text.trim()
+    if (trimmed.indexOf("/attach ") === 0) {
+      var p = trimmed.slice(8).trim()
+      if (p.indexOf("~/") === 0) p = root.home + p.slice(1)
+      setDraft(p)
+      composeField.text = ""
+      note = "attached — type a caption or press Enter to send"
+      return
+    }
+
+    if (draftPath === "" && trimmed === "") return
+    if (sendProc.running || fileSendProc.running) {
       note = "a message is already sending"
       return
     }
@@ -191,6 +306,16 @@ Panel {
     note = "sending…"
     sendChat = String(root.active.chat)
     sendText = text
+
+    if (draftPath !== "") {
+      // send-file.ts owns target resolution (group guid or DM handle).
+      sendDraftPath = draftPath
+      fileSendProc.command = ["bun", root.sendFileScript, sendChat, draftPath]
+        .concat(trimmed !== "" ? [text] : [])
+      fileSendProc.running = true
+      return
+    }
+
     // "--" so a message that starts with "-" is text, not a flag (argparse honours it).
     var target = root.activeIsGroup
       ? ["--chat-id", String(root.active.guid)]
@@ -233,6 +358,7 @@ Panel {
           if (d.ok === true) {
             root.bubbles = Array.isArray(d.bubbles) ? d.bubbles : []
             root.pinToBottom = true
+            Qt.callLater(root.autoFetchImages)
             // A dot means "looked at", so clear it only after content loaded.
             if (root.hostWidget) root.hostWidget.markThreadRead(root.threadRunningChat)
           } else {
@@ -279,6 +405,89 @@ Panel {
       if (belongsHere) composeField.forceActiveFocus()
     }
   }
+
+  // Attachment fetcher: one job at a time off root.fetchQueue.
+  Process {
+    id: fetchProc
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var id = root.fetchingId
+        try {
+          var d = JSON.parse(text.trim())
+          var m = Object.assign({}, root.attFiles)
+          m[id] = d.ok === true ? String(d.url || "") : ""
+          root.attFiles = m
+          if (d.ok === true && root.fetchJobOpen) {
+            openProc.command = ["xdg-open", String(d.url || "")]
+            openProc.running = true
+          }
+          if (d.ok !== true && d.online === false) root.note = "fetch failed — fnix unreachable"
+        } catch (e) {
+          var m2 = Object.assign({}, root.attFiles)
+          m2[id] = ""
+          root.attFiles = m2
+        }
+      }
+    }
+    onExited: function(code, status) {
+      root.fetchingId = ""
+      Qt.callLater(root.pumpFetch)
+    }
+  }
+
+  // Clipboard snapshot (Ctrl+V): image → draft chip, text → insert at cursor.
+  Process {
+    id: pasteProc
+    stdout: StdioCollector {
+      onStreamFinished: {
+        // A slow clipboard read must never attach content to a conversation
+        // the user has since navigated away from (Codex finding #2).
+        if (!root.inThread || String(root.active.chat) !== root.pasteChat) return
+        try {
+          var d = JSON.parse(text.trim())
+          if (d.kind === "image") root.setDraft(String(d.path || ""))
+          else if (d.kind === "text") {
+            composeField.insert(composeField.cursorPosition, String(d.text || ""))
+          }
+        } catch (e) { /* clipboard empty or helper failed — nothing to paste */ }
+      }
+    }
+  }
+
+  // File send via send-file.ts (target resolution + stdin transfer live there).
+  Process {
+    id: fileSendProc
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var belongsHere = root.inThread && String(root.active.chat) === root.sendChat
+        var ok = false, err = "file send failed"
+        try {
+          var d = JSON.parse(text.trim())
+          ok = d.ok === true
+          if (!ok) err = d.online === false ? "not sent — fnix unreachable" : String(d.error || err)
+        } catch (e) { /* fall through */ }
+        if (ok) {
+          // Only clear the draft this send actually shipped — the user may
+          // have queued a NEWER file while this one was in flight.
+          if (root.draftPath === root.sendDraftPath) root.clearDraft()
+          if (belongsHere) {
+            root.note = ""
+            if (composeField.text === root.sendText) composeField.text = ""
+          }
+          root.reloadChat = root.sendChat
+          reloadTimer.restart()
+        } else if (belongsHere) {
+          root.note = err
+        }
+        root.sendChat = ""
+        root.sendText = ""
+        if (belongsHere) composeField.forceActiveFocus()
+      }
+    }
+  }
+
+  Process { id: openProc }
+
   Timer {
     id: reloadTimer
     interval: 1500
@@ -363,9 +572,39 @@ Panel {
           // Layout height lands a frame or two after `bubbles` changes; a
           // one-shot callLater under-scrolled. Follow the height instead.
           onContentHeightChanged: if (root.pinToBottom && root.inThread) {
+            glide.stop()
             contentY = Math.max(0, contentHeight - height)
             if (!root.loading) root.pinToBottom = false
           }
+
+          // Smooth wheel scrolling — constant-velocity chase. Each wheel
+          // event moves an accumulated TARGET; a SmoothedAnimation glides
+          // contentY toward it at fixed px/s. Retargeting a SmoothedAnimation
+          // preserves velocity, so a hi-res wheel (MX Master) firing dozens
+          // of small events reads as ONE continuous sweep. (A restarted
+          // easing animation here dies by a thousand restarts — each event
+          // reset the curve and motion shrank the longer you spun.)
+          property real wheelTarget: 0
+          WheelHandler {
+            target: null
+            acceptedDevices: PointerDevice.Mouse
+            onWheel: (ev) => {
+              if (ev.pixelDelta.y !== 0) { ev.accepted = false; return } // touchpad: native
+              var max = Math.max(0, flick.contentHeight - flick.height)
+              var base = glide.running ? flick.wheelTarget : flick.contentY
+              flick.wheelTarget = Math.max(0, Math.min(max, base - (ev.angleDelta.y / 120) * 170))
+              glide.to = flick.wheelTarget
+              glide.restart()
+            }
+          }
+          SmoothedAnimation {
+            id: glide
+            target: flick
+            property: "contentY"
+            velocity: 3200
+          }
+          // A finger on the content beats the glide.
+          onDragStarted: glide.stop()
 
           ColumnLayout {
             id: content
@@ -634,11 +873,51 @@ Panel {
                     id: chipRow
                     required property var modelData
                     required property int index
+                    readonly property string attId: String(modelData.id || "")
+                    // undefined = not fetched, "" = failed, else file:// url
+                    readonly property var fileUrl: root.attFiles[chipRow.attId]
+                    readonly property bool failed: chipRow.fileUrl === ""
+                    readonly property bool showImage:
+                      root.isImageMime(chipRow.modelData.mime) &&
+                      chipRow.fileUrl !== undefined && chipRow.fileUrl !== ""
                     Layout.fillWidth: true
                     Layout.topMargin: index === 0 && bubbleRow.modelData.groupStart ? Style.space(6) : 0
                     spacing: 0
                     Item { Layout.fillWidth: true; visible: bubbleRow.mine }
+
+                    // fetched image renders inline, like Messages; click = full view
+                    Image {
+                      id: attImage
+                      visible: chipRow.showImage
+                      readonly property real maxW: Math.round(content.width * 0.6)
+                      source: chipRow.showImage ? chipRow.fileUrl : ""
+                      asynchronous: true
+                      fillMode: Image.PreserveAspectFit
+                      // bound the DECODE in BOTH axes, not just the paint — a
+                      // 12MP photo (or a 100×100000 sliver) must not cost
+                      // 50 MB of texture (Codex review points 19 and #3)
+                      sourceSize.width: 800
+                      sourceSize.height: 800
+                      // LRU eviction or a corrupt file: fall back to the chip
+                      // (⚠ marker); a click re-fetches through fetch.ts.
+                      onStatusChanged: if (status === Image.Error) {
+                        var m = Object.assign({}, root.attFiles)
+                        m[chipRow.attId] = ""
+                        root.attFiles = m
+                      }
+                      Layout.preferredWidth: status === Image.Ready ? Math.min(maxW, implicitWidth) : maxW
+                      Layout.preferredHeight: status === Image.Ready && implicitWidth > 0
+                        ? Layout.preferredWidth * implicitHeight / implicitWidth
+                        : Style.space(120)
+                      MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.openAttachment(chipRow.modelData)
+                      }
+                    }
+
                     Rectangle {
+                      visible: !chipRow.showImage
                       Layout.preferredWidth: Math.ceil(chipText.implicitWidth) + Style.space(18)
                       Layout.preferredHeight: Math.ceil(chipText.implicitHeight) + Style.space(12)
                       radius: Style.space(14)
@@ -647,7 +926,9 @@ Panel {
                       Text {
                         id: chipText
                         anchors.centerIn: parent
-                        text: root.attachmentIcon(chipRow.modelData.mime) + " " +
+                        text: (chipRow.failed ? "⚠ " : "") +
+                              (root.fetchingId === chipRow.attId ? "⏳ " : "") +
+                              root.attachmentIcon(chipRow.modelData.mime) + " " +
                               (String(chipRow.modelData.name || "").length > 32
                                 ? String(chipRow.modelData.name).slice(0, 29) + "…"
                                 : String(chipRow.modelData.name || "file"))
@@ -655,6 +936,11 @@ Panel {
                         color: bubbleRow.mine ? root.mineText : root.theirsText
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
+                      }
+                      MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.openAttachment(chipRow.modelData)
                       }
                     }
                     Item { Layout.fillWidth: true; visible: !bubbleRow.mine }
@@ -814,6 +1100,37 @@ Panel {
           foreground: root.foreground
         }
 
+        // queued attachment — one per message; ✕ removes it
+        RowLayout {
+          Layout.fillWidth: true
+          visible: root.inThread && root.draftPath !== ""
+          spacing: 0
+          Rectangle {
+            Layout.preferredWidth: Math.ceil(draftText.implicitWidth) + Style.space(18)
+            Layout.preferredHeight: Math.ceil(draftText.implicitHeight) + Style.space(12)
+            radius: Style.space(14)
+            color: root.mineFill
+            opacity: 0.9
+            Text {
+              id: draftText
+              anchors.centerIn: parent
+              text: "📎 " + (root.draftLabel.length > 40
+                              ? root.draftLabel.slice(0, 37) + "…"
+                              : root.draftLabel) + "   ✕"
+              textFormat: Text.PlainText
+              color: root.mineText
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.clearDraft()
+            }
+          }
+          Item { Layout.fillWidth: true }
+        }
+
         RowLayout {
           Layout.fillWidth: true
           visible: root.inThread
@@ -826,23 +1143,35 @@ Panel {
             // keyboard-focus holder, and disabling it dismisses the panel the
             // instant Enter is pressed. send() itself refuses concurrent sends.
             enabled: root.online && root.isSendable(root.active)
-            placeholderText: root.isSendable(root.active) ? "iMessage" : "Read-only — group id unknown"
+            placeholderText: root.draftPath !== ""
+              ? "caption (optional) — Enter sends the file"
+              : root.isSendable(root.active) ? "iMessage" : "Read-only — group id unknown"
             foreground: root.foreground
             accent: root.mineFill
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
             onAccepted: root.send()
             Keys.onEscapePressed: root.back()
+            // Ctrl+V goes through paste.ts: an image on the clipboard becomes
+            // a draft chip; text falls through to a manual insert. One process
+            // snapshots types AND data — probing then re-reading races.
+            Keys.onPressed: (event) => {
+              if (event.matches(StandardKey.Paste)) {
+                event.accepted = true
+                root.startPaste()
+              }
+            }
           }
 
-          // send button — the blue arrow circle
+          // send button — the blue arrow circle (lit when text OR a file is queued)
           Rectangle {
+            readonly property bool armed: composeField.text.trim() !== "" || root.draftPath !== ""
             width: Style.space(28); height: width; radius: width / 2
-            color: composeField.text.trim() === "" ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.15) : root.mineFill
+            color: armed ? root.mineFill : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.15)
             Text {
               anchors.centerIn: parent
               text: "↑"
-              color: composeField.text.trim() === "" ? root.dim : "#ffffff"
+              color: parent.armed ? "#ffffff" : root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
               font.bold: true
@@ -861,6 +1190,20 @@ Panel {
           font.pixelSize: Style.font.caption
           wrapMode: Text.WordWrap
         }
+      }
+    }
+
+    // drag a file from a file manager onto the open conversation → draft chip
+    DropArea {
+      anchors.fill: parent
+      enabled: root.inThread
+      keys: ["text/uri-list"]
+      onDropped: (drop) => {
+        if (!drop.hasUrls || drop.urls.length === 0) return
+        var u = String(drop.urls[0])
+        if (u.indexOf("file://") !== 0) return
+        root.setDraft(decodeURIComponent(u.replace(/^file:\/\//, "")))
+        drop.accept()
       }
     }
   }

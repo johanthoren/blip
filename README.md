@@ -65,7 +65,8 @@ Linux side. If the Mac is asleep, the widget dims and says so.
 - **tapbacks** — ❤️👍😂 pills on the bubble corner, custom emoji included
 - **"Read 4:42 PM"** under the last message of yours they've read (display only — Blip never sends receipts)
 - **inline replies** quoted above the bubble · **Edited** tags · "unsent a message" tombstones
-- **attachment chips** — 📷 🎬 📄 with the filename; files stay on the Mac (fetching is on the roadmap)
+- **photos render inline** — images ≤5MB auto-fetch over SSH (HEIC converted on the Mac); click opens full-size. PDFs/videos are chips — click fetches and opens them
+- **send files** — Ctrl+V an image into the compose box, type `/attach <path>`, or drag-and-drop; a caption rides along
 - select text and Ctrl+C · right-click a bubble to copy it whole
 - compose box at the bottom, Enter sends — **DMs and groups**
 
@@ -114,8 +115,8 @@ calls `imsg` and `imsg-send` and nothing else. Install that first.
 - A Mac signed into Messages with your Apple ID (a Mac mini in a closet is
   perfect), reachable from the Linux box over SSH — Tailscale recommended.
 - *Messages in iCloud* on, so the Mac's `chat.db` mirrors your phone.
-- claude-on-mac **≥ 1.5.1** (`imsg --rich`: tapbacks, read receipts, replies,
-  attachments; plus `imsg groups` and the Recently-Deleted filter).
+- claude-on-mac **≥ 1.6.0** (`imsg --rich` + `imsg attachment` streaming +
+  `imsg-send --file-stdin`; plus `imsg groups` and the Recently-Deleted filter).
 - Linux: [Omarchy](https://omarchy.org), `bun`, `notify-send`, `wl-copy`.
 
 **1. On the Mac** — follow claude-on-mac's README (it's one paste into Claude
@@ -159,7 +160,9 @@ is in your bar.
 | list | `Enter` · `1`–`9` | open thread |
 | list | `r` | refresh |
 | list | `a` · *mark all read* link | clear every badge and dot (local only — iMessage itself is not told) |
-| thread | `Enter` | send |
+| thread | `Enter` | send (text, or the queued file with the text as caption) |
+| thread | `Ctrl+V` | paste — an image on the clipboard becomes a queued file, text pastes normally |
+| thread | `/attach <path>` + `Enter` | queue any file on this machine; drag-and-drop works too |
 | thread | `Esc` | back to list (or clear a text selection first) |
 | anywhere | `Esc` | close |
 
