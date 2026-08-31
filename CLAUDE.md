@@ -73,4 +73,10 @@ to whatever has focus otherwise.
 ## Things that are not possible
 
 - Read receipts. `open imessage://<handle>` on the Mac does not flip `is_read`.
-- Tapbacks, edits, threads, attachments out. AppleScript cannot.
+- Tapbacks, edits, typing indicators out. Needs SIP-off code injection; rejected.
+
+## Things that ARE possible (verified 2026-08-31)
+
+- **Attachments out.** `send POSIX file` works on Sequoia IF the file is staged
+  in `~/Pictures/` — from anywhere else Messages fails silently (`error=25`,
+  "Not Delivered"). Verified delivered for PNG and PDF. See ROADMAP.md.
