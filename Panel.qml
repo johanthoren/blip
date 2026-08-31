@@ -146,6 +146,23 @@ Panel {
     root.hostWidget.markAllRead()
   }
 
+  /** Chip icon for an attachment's mime type. */
+  function attachmentIcon(mime) {
+    var m = String(mime || "")
+    if (m.indexOf("image/") === 0) return "📷"
+    if (m.indexOf("video/") === 0) return "🎬"
+    if (m.indexOf("audio/") === 0) return "🎤"
+    if (m === "application/pdf") return "📄"
+    return "📎"
+  }
+
+  /** "❤️👍" — the emoji string for a bubble's tapback pill. */
+  function tapbackRow(list) {
+    var s = ""
+    for (var i = 0; i < (list || []).length; i++) s += list[i].emoji
+    return s
+  }
+
   function composeAndSend(text) {
     if (!inThread) return "not in a thread"
     composeField.text = String(text || "")
@@ -557,12 +574,103 @@ Panel {
                   font.pixelSize: Style.font.caption
                 }
 
+                // "You unsent a message" tombstone replaces a retracted bubble
+                RowLayout {
+                  Layout.fillWidth: true
+                  visible: modelData.retracted === true
+                  spacing: 0
+                  Item { Layout.fillWidth: true; visible: bubbleRow.mine }
+                  Text {
+                    text: (bubbleRow.mine ? "You" : String(modelData.name || "They")) + " unsent a message"
+                    textFormat: Text.PlainText
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.italic: true
+                    padding: Style.space(4)
+                  }
+                  Item { Layout.fillWidth: true; visible: !bubbleRow.mine }
+                }
+
+                // inline-reply context: the quoted snippet, dimmed, above the bubble
+                RowLayout {
+                  Layout.fillWidth: true
+                  visible: !modelData.retracted && String(modelData.replyText || "") !== ""
+                  Layout.topMargin: modelData.groupStart ? Style.space(6) : 0
+                  spacing: 0
+                  Item { Layout.fillWidth: true; visible: bubbleRow.mine }
+                  Rectangle {
+                    Layout.preferredWidth: Math.min(Math.ceil(replySnippet.implicitWidth) + Style.space(18), Math.round(content.width * 0.7))
+                    Layout.preferredHeight: Math.ceil(replySnippet.implicitHeight) + Style.space(10)
+                    radius: Style.space(12)
+                    color: "transparent"
+                    border.color: root.dim
+                    border.width: 1
+                    opacity: 0.75
+                    Text {
+                      id: replySnippet
+                      x: Style.space(9); y: Style.space(5)
+                      width: Math.round(content.width * 0.7) - Style.space(18)
+                      text: "↩ " + (modelData.replyMine ? "You: " : "") + String(modelData.replyText || "")
+                      textFormat: Text.PlainText
+                      elide: Text.ElideRight
+                      maximumLineCount: 1
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+                  Item { Layout.fillWidth: true; visible: !bubbleRow.mine }
+                }
+
+                // attachment chips — metadata only, the file itself is on the
+                // Mac. One chip per ROW: a single horizontal run of chips once
+                // summed its implicit widths into the delegate and stretched
+                // the whole column past the panel edge (a URL message can
+                // carry several attachments).
+                Repeater {
+                  model: modelData.retracted ? [] : (modelData.attachments || [])
+                  delegate: RowLayout {
+                    id: chipRow
+                    required property var modelData
+                    required property int index
+                    Layout.fillWidth: true
+                    Layout.topMargin: index === 0 && bubbleRow.modelData.groupStart ? Style.space(6) : 0
+                    spacing: 0
+                    Item { Layout.fillWidth: true; visible: bubbleRow.mine }
+                    Rectangle {
+                      Layout.preferredWidth: Math.ceil(chipText.implicitWidth) + Style.space(18)
+                      Layout.preferredHeight: Math.ceil(chipText.implicitHeight) + Style.space(12)
+                      radius: Style.space(14)
+                      color: bubbleRow.mine ? root.mineFill : root.theirsFill
+                      opacity: 0.85
+                      Text {
+                        id: chipText
+                        anchors.centerIn: parent
+                        text: root.attachmentIcon(chipRow.modelData.mime) + " " +
+                              (String(chipRow.modelData.name || "").length > 32
+                                ? String(chipRow.modelData.name).slice(0, 29) + "…"
+                                : String(chipRow.modelData.name || "file"))
+                        textFormat: Text.PlainText
+                        color: bubbleRow.mine ? root.mineText : root.theirsText
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                      }
+                    }
+                    Item { Layout.fillWidth: true; visible: !bubbleRow.mine }
+                  }
+                }
+
                 // the bubble in an explicit spacer row: a stretchy Item on
                 // the sender's far side guarantees right/left placement even
                 // when the delegate's own width collapses to its content.
                 RowLayout {
                   Layout.fillWidth: true
-                  Layout.topMargin: modelData.groupStart ? Style.space(6) : 0
+                  // a tapback pill overlaps the top edge — leave room for it
+                  Layout.topMargin: (modelData.groupStart ? Style.space(6) : 0)
+                                    + ((modelData.tapbacks || []).length > 0 ? Style.space(12) : 0)
+                  visible: !modelData.retracted &&
+                           (String(modelData.text || "") !== "" || (modelData.attachments || []).length === 0)
                   spacing: 0
 
                   Item { Layout.fillWidth: true; visible: bubbleRow.mine }
@@ -612,27 +720,75 @@ Panel {
                       acceptedButtons: Qt.RightButton
                       onTapped: root.copyText(String(modelData.text || ""))
                     }
+
+                    // tapback pill overlapping the corner opposite the tail
+                    Rectangle {
+                      visible: (modelData.tapbacks || []).length > 0
+                      width: Math.ceil(tapbackText.implicitWidth) + Style.space(12)
+                      height: Math.ceil(tapbackText.implicitHeight) + Style.space(8)
+                      radius: height / 2
+                      color: bubbleRow.mine ? Qt.darker(root.mineFill, 2.2) : root.mineFill
+                      border.color: Qt.rgba(0, 0, 0, 0.5)
+                      border.width: 2
+                      anchors.top: parent.top
+                      anchors.topMargin: -Style.space(12)
+                      anchors.right: bubbleRow.mine ? undefined : parent.right
+                      anchors.rightMargin: bubbleRow.mine ? 0 : -Style.space(6)
+                      anchors.left: bubbleRow.mine ? parent.left : undefined
+                      anchors.leftMargin: bubbleRow.mine ? -Style.space(6) : 0
+                      Text {
+                        id: tapbackText
+                        anchors.centerIn: parent
+                        text: root.tapbackRow(modelData.tapbacks)
+                        textFormat: Text.PlainText
+                        font.pixelSize: Style.font.caption
+                      }
+                    }
                   }
 
                   Item { Layout.fillWidth: true; visible: !bubbleRow.mine }
                 }
 
-                // timestamp under the last bubble of a run, same spacer trick
+                // timestamp under the last bubble of a run, same spacer trick;
+                // carries the "Edited" and "sent with <effect>" tags too
                 RowLayout {
                   Layout.fillWidth: true
-                  visible: String(modelData.time || "") !== ""
+                  visible: String(modelData.time || "") !== "" ||
+                           modelData.edited === true || String(modelData.effect || "") !== ""
                   spacing: 0
                   Item { Layout.fillWidth: true; visible: bubbleRow.mine }
                   Text {
                     Layout.rightMargin: bubbleRow.mine ? Style.space(6) : 0
                     Layout.leftMargin: bubbleRow.mine ? 0 : Style.space(6)
-                    text: String(modelData.time || "")
+                    text: [String(modelData.time || ""),
+                           modelData.edited === true ? "Edited" : "",
+                           String(modelData.effect || "") !== "" ? "sent with " + modelData.effect : ""]
+                          .filter(function(s) { return s !== "" }).join(" · ")
+                    textFormat: Text.PlainText
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
                     bottomPadding: Style.space(4)
                   }
                   Item { Layout.fillWidth: true; visible: !bubbleRow.mine }
+                }
+
+                // "Read 4:42 PM" — only ever under the newest read from-me bubble
+                RowLayout {
+                  Layout.fillWidth: true
+                  visible: String(modelData.receipt || "") !== ""
+                  spacing: 0
+                  Item { Layout.fillWidth: true }
+                  Text {
+                    Layout.rightMargin: Style.space(6)
+                    text: String(modelData.receipt || "")
+                    textFormat: Text.PlainText
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                    bottomPadding: Style.space(4)
+                  }
                 }
 
               }

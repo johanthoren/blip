@@ -62,6 +62,10 @@ Linux side. If the Mac is asleep, the widget dims and says so.
 - real bubbles — yours blue on the right, theirs grey on the left
 - grouped into runs with one timestamp per run, day dividers, squared "tail" corner
 - sender names above each run in a group
+- **tapbacks** — ❤️👍😂 pills on the bubble corner, custom emoji included
+- **"Read 4:42 PM"** under the last message of yours they've read (display only — Blip never sends receipts)
+- **inline replies** quoted above the bubble · **Edited** tags · "unsent a message" tombstones
+- **attachment chips** — 📷 🎬 📄 with the filename; files stay on the Mac (fetching is on the roadmap)
 - select text and Ctrl+C · right-click a bubble to copy it whole
 - compose box at the bottom, Enter sends — **DMs and groups**
 
@@ -110,7 +114,8 @@ calls `imsg` and `imsg-send` and nothing else. Install that first.
 - A Mac signed into Messages with your Apple ID (a Mac mini in a closet is
   perfect), reachable from the Linux box over SSH — Tailscale recommended.
 - *Messages in iCloud* on, so the Mac's `chat.db` mirrors your phone.
-- claude-on-mac **≥ 1.4.0** (`imsg groups` and the Recently-Deleted filter).
+- claude-on-mac **≥ 1.5.1** (`imsg --rich`: tapbacks, read receipts, replies,
+  attachments; plus `imsg groups` and the Recently-Deleted filter).
 - Linux: [Omarchy](https://omarchy.org), `bun`, `notify-send`, `wl-copy`.
 
 **1. On the Mac** — follow claude-on-mac's README (it's one paste into Claude
@@ -205,11 +210,13 @@ The 273,000-message history stays on the Mac where it lives.
 
 ## What it can't do
 
-- **Read receipts.** Tested: opening the conversation on the Mac via
+- **Send read receipts.** Tested: opening the conversation on the Mac via
   `open imessage://…` does not flip `is_read`. Needs Apple's private API.
-- **Tapbacks, edits, replies-in-thread, outbound attachments.** AppleScript
-  can't. If you need those, [BlueBubbles](https://bluebubbles.app) is the
-  right tool and requires disabling SIP.
+  (Showing *their* receipts on your messages works fine — that's in.)
+- **Send tapbacks, edits, or threaded replies.** AppleScript can't; Blip
+  *displays* all three. If you need to send them,
+  [BlueBubbles](https://bluebubbles.app) is the right tool and requires
+  disabling SIP.
 - **Work without a Mac, or while the Mac sleeps.** Inherent to the approach.
   The widget dims and tells you.
 

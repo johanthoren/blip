@@ -11,7 +11,15 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { chatKey, dedupeSelfEcho, isGroupChat, loadState, type ImsgMessage } from "./collector";
+import {
+  chatKey,
+  dedupeSelfEcho,
+  isGroupChat,
+  loadState,
+  type AttachmentMeta,
+  type ImsgMessage,
+  type Tapback,
+} from "./collector";
 export { dedupeSelfEcho };
 
 const HOME = process.env.HOME ?? "/home/pi";
@@ -32,6 +40,21 @@ export interface Bubble {
   groupEnd: boolean;
   /** "9:41 PM", shown only on groupEnd. */
   time: string;
+  /** "Read 4:42 PM" — only on the NEWEST read from-me bubble, like iMessage. */
+  receipt: string;
+  /** Reactions folded onto this bubble; [] when none. */
+  tapbacks: Tapback[];
+  /** Attachment chips ("📷 IMG_4502.png"); metadata only, files stay on the Mac. */
+  attachments: AttachmentMeta[];
+  /** Inline-reply context: the quoted snippet, "" when not a reply. */
+  replyText: string;
+  replyMine: boolean;
+  edited: boolean;
+  /** An unsent message renders as a tombstone, not a bubble. */
+  retracted: boolean;
+  /** Screen/bubble effect short name ("confetti"), "" when none. */
+  effect: string;
+  audio: boolean;
 }
 
 export interface ThreadOutput {
@@ -95,6 +118,12 @@ export function minutesBetween(a: string, b: string): number {
 export function decorate(msgs: ImsgMessage[], today: string): Bubble[] {
   const out: Bubble[] = [];
 
+  // iMessage shows "Read" under only the newest read message you sent.
+  let receiptIdx = -1;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i]!.from_me && msgs[i]!.read_at) { receiptIdx = i; break; }
+  }
+
   for (let i = 0; i < msgs.length; i++) {
     const m = msgs[i]!;
     const prev = i > 0 ? msgs[i - 1]! : null;
@@ -121,15 +150,37 @@ export function decorate(msgs: ImsgMessage[], today: string): Bubble[] {
       ts: m.ts,
       from_me: m.from_me,
       name: m.name ?? m.handle ?? "",
-      text: m.text ?? "",
+      // U+FFFC is the object-replacement placeholder Messages leaves where an
+      // attachment sat; the chip row carries that information instead.
+      text: (m.text ?? "").replace(/￼/g, "").trim(),
       day: newDay ? dayLabel(m.ts, today) : "",
       groupStart,
       groupEnd,
       time: groupEnd ? clockLabel(m.ts) : "",
+      receipt: i === receiptIdx ? receiptLabel(m.read_at!, today) : "",
+      tapbacks: m.tapbacks ?? [],
+      // Belt to imsg 1.5.1's suspenders: link-preview payloads are not files.
+      attachments: (m.attachments ?? []).filter(
+        (a) => !String(a.name || "").endsWith(".pluginPayloadAttachment"),
+      ),
+      replyText: m.reply_to?.text ?? "",
+      replyMine: m.reply_to?.from_me ?? false,
+      edited: m.edited === true,
+      retracted: m.retracted === true,
+      effect: m.effect ?? "",
+      audio: m.audio === true,
     });
   }
 
   return out;
+}
+
+/** "Read 4:42 PM" today, "Read Yesterday 9:03 AM" otherwise. */
+export function receiptLabel(readAt: string, today: string): string {
+  const clock = clockLabel(readAt);
+  if (!clock) return "Read";
+  const day = dayLabel(readAt, today);
+  return day === "Today" ? `Read ${clock}` : `Read ${day} ${clock}`;
 }
 
 /** Local calendar date — toISOString() is UTC and flips "Today" at 8pm EDT. */
@@ -176,8 +227,8 @@ export function loadThread(
   // never hits. For groups, pull a wide recent window and filter by chat.
   const group = isGroupChat(chat);
   const args = group
-    ? ["--json", "recent", String(GROUP_SCAN_WINDOW)]
-    : ["--json", "thread", chat, String(limit)];
+    ? ["--json", "--rich", "recent", String(GROUP_SCAN_WINDOW)]
+    : ["--json", "--rich", "thread", chat, String(limit)];
   const res = runner(`${HOME}/bin/imsg`, args, {
     encoding: "utf8",
     timeout: 15000,

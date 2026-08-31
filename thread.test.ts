@@ -9,6 +9,7 @@ import {
   loadThread,
   localToday,
   minutesBetween,
+  receiptLabel,
   selectThread,
 } from "./thread";
 
@@ -348,6 +349,83 @@ describe("selectThread", () => {
     let seen: string[] = [];
     const runner = ((_: string, args: string[]) => { seen = args; return { status: 0, stdout: "[]", stderr: "" }; }) as never;
     loadThread(guid, 80, "2026-08-30", runner);
-    expect(seen[1]).toBe("recent");
+    expect(seen).toContain("--rich");
+    expect(seen[2]).toBe("recent");
+  });
+});
+
+describe("rich decoration", () => {
+  const today = "2026-08-31";
+
+  test("receipt lands only on the NEWEST read from-me bubble", () => {
+    const out = decorate(
+      [
+        msg({ ts: "2026-08-31 10:00:00", from_me: true, read_at: "2026-08-31 10:00:30" }),
+        msg({ ts: "2026-08-31 10:05:00", from_me: false }),
+        msg({ ts: "2026-08-31 10:06:00", from_me: true, read_at: "2026-08-31 10:07:12" }),
+        msg({ ts: "2026-08-31 10:08:00", from_me: true }), // sent, not yet read
+      ],
+      today,
+    );
+    expect(out.map((b) => b.receipt)).toEqual(["", "", "Read 10:07 AM", ""]);
+  });
+
+  test("receipt from an earlier day carries the day label", () => {
+    expect(receiptLabel("2026-08-30 21:03:00", today)).toBe("Read Yesterday 9:03 PM");
+    expect(receiptLabel("2026-08-31 16:42:00", today)).toBe("Read 4:42 PM");
+  });
+
+  test("link-preview payload pseudo-attachments are filtered out", () => {
+    const out = decorate(
+      [msg({
+        text: "Edgeupbarber.com",
+        attachments: [
+          { name: "D8149C0E.pluginPayloadAttachment", mime: null, bytes: 29909 },
+          { name: "real.pdf", mime: "application/pdf", bytes: 5 },
+        ],
+      })],
+      today,
+    );
+    expect(out[0]!.attachments.map((a) => a.name)).toEqual(["real.pdf"]);
+  });
+
+  test("attachment placeholder char is stripped, chips pass through", () => {
+    const out = decorate(
+      [msg({ text: "￼", attachments: [{ name: "IMG_1.png", mime: "image/png", bytes: 5 }] })],
+      today,
+    );
+    expect(out[0]!.text).toBe("");
+    expect(out[0]!.attachments).toEqual([{ name: "IMG_1.png", mime: "image/png", bytes: 5 }]);
+  });
+
+  test("tapbacks, reply context, edited, retracted, effect all pass through", () => {
+    const out = decorate(
+      [
+        msg({
+          tapbacks: [{ emoji: "❤️", from_me: false, by: "Tom" }],
+          reply_to: { text: "Working late!", from_me: true },
+          edited: true,
+          effect: "confetti",
+        }),
+        msg({ ts: "2026-08-31 10:01:00", retracted: true }),
+      ],
+      today,
+    );
+    expect(out[0]!.tapbacks[0]!.emoji).toBe("❤️");
+    expect(out[0]!.replyText).toBe("Working late!");
+    expect(out[0]!.replyMine).toBe(true);
+    expect(out[0]!.edited).toBe(true);
+    expect(out[0]!.effect).toBe("confetti");
+    expect(out[1]!.retracted).toBe(true);
+  });
+
+  test("plain (non-rich) messages decorate with empty extras", () => {
+    const out = decorate([msg({})], today);
+    expect(out[0]!.receipt).toBe("");
+    expect(out[0]!.tapbacks).toEqual([]);
+    expect(out[0]!.attachments).toEqual([]);
+    expect(out[0]!.replyText).toBe("");
+    expect(out[0]!.edited).toBe(false);
+    expect(out[0]!.retracted).toBe(false);
   });
 });

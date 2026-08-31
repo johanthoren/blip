@@ -7,19 +7,21 @@ changes to the Mac beyond claude-on-mac updates.
 
 ## Tier 1 — display parity (data already in chat.db, read-only)
 
-- [ ] **Contact names + avatars** — AddressBook `.abcddb` → handle→name map via
-  a new `imsg` query; initials circles first, contact photos later.
-- [ ] **Read receipts (inbound)** — `message.date_read` → "Read 4:42 PM" under
-  your last sent bubble. (Sending receipts stays impossible.)
-- [ ] **Tapbacks on bubbles** — `associated_message_type` 2000–3007 → ❤️👍😂
-  corner badges with who reacted.
-- [ ] **Inline replies** — `thread_originator_guid` → quoted snippet above the
-  bubble.
-- [ ] **Edited / unsent markers** — `date_edited` / `date_retracted` → "edited"
-  tag and "unsent a message" tombstone.
-- [ ] **Attachment previews (stage 1)** — `message_attachment_join` → empty
-  bubbles become "📷 photo" / "📄 PDF" chips; fixes blank inbound bubbles.
-- [ ] **Send-effect labels** — `expressive_send_style_id` → "sent with Lasers".
+- [x] **Contact names + avatars** — names + initials circles predated this
+  roadmap (imsg resolves Contacts natively). Contact PHOTOS still open —
+  needs image transfer + the same cache decision as attachments.
+- [x] **Read receipts (inbound)** — shipped 0.8.0 via `imsg --rich` `read_at`;
+  "Read 4:42 PM" under the newest read from-me bubble only.
+- [x] **Tapbacks on bubbles** — shipped 0.8.0: corner pills, net add/remove
+  per sender, custom emoji included; the `Loved "…"` pseudo-rows are folded.
+- [x] **Inline replies** — shipped 0.8.0: quoted snippet above the bubble.
+- [x] **Edited / unsent markers** — shipped 0.8.0: "· Edited" in the time row,
+  "unsent a message" tombstone.
+- [x] **Attachment previews (stage 1)** — shipped 0.8.0: one chip per row
+  (NEVER one row of N chips — implicit-width inflation, see CLAUDE.md);
+  `.pluginPayloadAttachment` link-preview blobs filtered (imsg 1.5.1).
+- [x] **Send-effect labels** — shipped 0.8.0: "· sent with confetti" in the
+  time row.
 
 ## Tier 2 — attachments both directions (mechanisms proven 2026-08-31)
 
@@ -50,6 +52,16 @@ changes to the Mac beyond claude-on-mac updates.
 - [ ] **Standalone window** — QuickShell window reusing the existing QML,
   Messages.app layout (sidebar + conversation). Tauri v2 only if it ever needs
   to run off-Omarchy.
+
+## Prior art
+
+- **[BlueFerry](https://github.com/erikwb/blueferry)** — iMessage on Linux over
+  Bluetooth MAP straight to the iPhone (no Mac). Decision 2026-08-31: fnix
+  stays Blip's source (BT gets no attachments, no tapbacks, no history, shaky
+  groups), but BlueFerry does two things Blip can't: **mark messages read on
+  the phone** and push-latency delivery. Its Quickshell client is worth
+  reading; a future hybrid could borrow BT MAP *just* for read-marking.
+  Check its license before lifting code.
 
 ## Not possible (and why)
 

@@ -38,6 +38,11 @@ export const POLL_WINDOW = 150;
 /** Deep window, fetched when the panel opens and needs a real thread list. */
 export const DEEP_WINDOW = 500;
 
+/** One reaction folded onto its target message (imsg --rich). */
+export interface Tapback { emoji: string; from_me: boolean; by: string | null }
+/** Attachment metadata only — the file itself stays on the Mac. */
+export interface AttachmentMeta { name: string; mime: string | null; bytes: number | null }
+
 export interface ImsgMessage {
   /** Stable chat.db message ROWID, supplied by bridges that expose it. */
   id?: number | string;
@@ -52,6 +57,15 @@ export interface ImsgMessage {
   service: string;
   chat: string;        // phone/email for DMs, opaque GUID for group chats
   text: string;
+  // ---- imsg --rich extras (claude-on-mac ≥ 1.5.0); absent on plain fetches
+  read_at?: string | null;
+  tapbacks?: Tapback[] | null;
+  attachments?: AttachmentMeta[] | null;
+  reply_to?: { text: string; from_me: boolean } | null;
+  edited?: boolean | null;
+  retracted?: boolean | null;
+  effect?: string | null;
+  audio?: boolean | null;
 }
 
 export interface Thread {

@@ -6,7 +6,8 @@ treating a Mac as the gateway. Read this before touching anything.
 ## Shape
 
 ```
-(Mac side)    imsg, imsg-send      from github.com/nixfred/claude-on-mac ≥ 1.4.0 — sqlite read of chat.db;
+(Mac side)    imsg, imsg-send      from github.com/nixfred/claude-on-mac ≥ 1.5.1 — sqlite read of chat.db;
+                                    `--rich` adds tapbacks/read_at/reply_to/attachments to thread JSON.
                                     AppleScript send; `imsg --json groups`; Recently Deleted hidden.
 (Linux side)  ~/bin/imsg, imsg-send claude-on-mac's bin/remote/ ssh shims (CLAUDE_ON_MAC_TARGET), or any
                                     equivalent that execs the Mac tool over ssh. Blip only calls ~/bin/imsg*.
@@ -46,6 +47,12 @@ what it is handed. Keep it that way.
   "not a phone/email" — never a positive regex on one shape.
 - **Deleted messages stay in chat.db for 30 days** (`chat_recoverable_message_join`).
   claude-on-mac's `imsg` hides them (1.4.0+); Blip assumes that.
+- **Never let one delegate's implicit width exceed the panel.** A single
+  RowLayout of N attachment chips summed implicit widths and silently
+  stretched the whole conversation column to 2× panel width — every
+  right-aligned element rendered off-panel, invisible, with no QML warning.
+  Attachment chips are one per row for this reason. Debug trick: log
+  `bubbleRow.width` per delegate; 1136 in a 560 panel = this bug.
 
 ## Working on it
 
