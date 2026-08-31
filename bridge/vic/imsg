@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# imsg (vic) — thin client for fnix's read-only iMessage query tool.
+#
+# iMessage is macOS-only: chat.db lives on fnix and is TCC-protected. sshd on
+# fnix holds Full Disk Access, so we proxy every query over the multiplexed
+# ssh ControlMaster socket (~47ms warm). Backend: fnix:/Users/pi/bin/imsg
+#
+# Usage is identical to the fnix tool: recent|from|search|thread|contacts|chats
+set -euo pipefail
+
+if ! ssh -o ConnectTimeout=5 fnix true 2>/dev/null; then
+  echo "imsg: fnix unreachable — the iMessage bridge is offline." >&2
+  exit 69   # EX_UNAVAILABLE
+fi
+
+# `imsg groups` is vic-local: the fnix tool has no group lookup, and Law 7 says
+# extend the shim rather than fork Fred's Python. Emits JSON
+# [{chat, name, participants:[handle,...]}] for every group chat (style=43).
+if [[ "${1:-}" == "groups" ]]; then
+  exec ssh fnix 'PATH=/opt/homebrew/bin:$PATH sqlite3 -json "file:$HOME/Library/Messages/chat.db?mode=ro" \
+    "select c.chat_identifier as chat, c.guid as guid, coalesce(c.display_name,\"\") as name, group_concat(h.id, \",\") as participants \
+     from chat c left join chat_handle_join j on j.chat_id=c.ROWID left join handle h on h.ROWID=j.handle_id \
+     where c.style=43 group by c.ROWID"'
+fi
+
+exec ssh fnix "PATH=/opt/homebrew/bin:\$PATH python3 \$HOME/bin/imsg ${*@Q}"

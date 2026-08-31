@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# imsg-send (vic) — thin client for fnix's AppleScript send bridge.
+#
+# Sends via Messages.app on fnix. Like the backend, this is DRY RUN unless you
+# pass --yes. Verified working from vic 2026-08-30 (sshd inherits the Automation
+# grant that cron does not). Backend: fnix:/Users/pi/bin/imsg-send
+#
+# Usage: imsg-send --to <handle> [--yes] <text>...
+#        imsg-send --self [--yes] <text>...
+set -euo pipefail
+
+if ! ssh -o ConnectTimeout=5 fnix true 2>/dev/null; then
+  echo "imsg-send: fnix unreachable — cannot send, the bridge is offline." >&2
+  exit 69
+fi
+
+exec ssh fnix "PATH=/opt/homebrew/bin:\$PATH python3 \$HOME/bin/imsg-send ${*@Q}"
